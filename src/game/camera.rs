@@ -7,6 +7,7 @@ use super::player::{Player, Velocity, move_player};
 use super::screen::Screen;
 
 use crate::camera_math::{CAMERA_DECAY, VIEW_HEIGHT, VIEW_WIDTH};
+use crate::motion::MAX_FRAME_SECONDS;
 use crate::scale::WORLD_HALF_EXTENTS;
 use crate::torus::{wrap_position, wrapped_delta};
 use crate::tween;
@@ -72,7 +73,13 @@ fn follow_player(
     let next = if input.just_pressed(KeyCode::KeyR) {
         target
     } else {
-        tween::exponential(&here, &target, CAMERA_DECAY, time.delta_secs())
+        // Cap the frame time to match `advance_motion`: a backgrounded browser
+        // tab or a frame spike must not snap the camera to its target the way a
+        // huge delta otherwise would (blend factor → 1.0). The player already
+        // applies this same cap, so the camera lag stays perceptually consistent
+        // across refresh rates and tab-switch resumptions on both native and web.
+        let dt = time.delta_secs().min(MAX_FRAME_SECONDS);
+        tween::exponential(&here, &target, CAMERA_DECAY, dt)
     };
     camera.translation = wrap_position(next, WORLD_HALF_EXTENTS).extend(camera.translation.z);
 }
