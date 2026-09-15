@@ -112,7 +112,9 @@ fn advance_shrapnel(
     time: Res<Time>,
     mut pieces: Query<(Entity, &mut Shrapnel, &mut Transform)>,
 ) {
-    let delta = time.delta_secs();
+    // Cap matches every other time-consuming system: a WASM frame spike must not
+    // jump piece ages forward far enough that `is_alive` kills them immediately.
+    let delta = time.delta_secs().min(0.05);
     for (entity, mut piece, mut transform) in &mut pieces {
         piece.age += delta;
         let scale = shrink_at(piece.age);

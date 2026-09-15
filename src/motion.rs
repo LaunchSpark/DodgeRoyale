@@ -18,7 +18,7 @@ const PLAYER_SPEED: f32 = 937.5;
 /// The cart keeps 0.8 of its velocity each 60 Hz frame; the equivalent
 /// continuous decay is `-ln(0.8) * 60`, which reproduces that ramp exactly.
 const MOVEMENT_RESPONSE: f32 = 13.388_61;
-const MAX_FRAME_SECONDS: f32 = 0.05;
+pub const MAX_FRAME_SECONDS: f32 = 0.05;
 
 /// Advance a player's position and velocity using smooth acceleration and braking.
 ///

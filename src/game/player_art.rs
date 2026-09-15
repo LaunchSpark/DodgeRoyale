@@ -101,8 +101,11 @@ fn age_trail(
     time: Res<Time>,
     mut particles: Query<(Entity, &mut TrailParticle, &mut Sprite)>,
 ) {
+    // Cap matches `emit_trail` and `advance_motion`: a WASM frame spike must not
+    // instantly age particles to death before they have been seen even once.
+    let delta = time.delta_secs().min(0.05);
     for (entity, mut particle, mut sprite) in &mut particles {
-        particle.age += time.delta_secs();
+        particle.age += delta;
         if particle.age >= TRAIL_SECONDS {
             commands.entity(entity).despawn();
         } else {
