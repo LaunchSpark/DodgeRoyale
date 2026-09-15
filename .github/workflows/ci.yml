@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_USER: dodgeroyale
+          POSTGRES_PASSWORD: dodgeroyale
+          POSTGRES_DB: dodgeroyale
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dodgeroyale -d dodgeroyale"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.95.0
+        run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux Bevy dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libwayland-dev libxkbcommon-dev \
+            libxkbcommon-x11-0 libudev-dev libasound2-dev
+
+      - name: Check Docker Compose configuration
+        run: docker compose --profile tools config --quiet
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint graphical build
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Lint headless build
+        run: cargo clippy --locked --all-targets --no-default-features -- -D warnings
+
+      - name: Run headless tests
+        run: cargo test --locked --no-default-features
+
+      - name: Smoke-test headless startup
+        run: cargo run --locked --no-default-features -- --smoke-test
+
+      - name: Run opt-in database integration test
+        env:
+          DATABASE_URL: postgres://dodgeroyale:dodgeroyale@localhost:5432/dodgeroyale
+        run: cargo test --locked --no-default-features --test database -- --ignored

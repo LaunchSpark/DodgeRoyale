@@ -1,0 +1,3 @@
+[alias]
+headless = "run --no-default-features"
+smoke = "run --no-default-features -- --smoke-test"

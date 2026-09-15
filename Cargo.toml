@@ -1,0 +1,75 @@
+[package]
+name = "dodge-royale"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "Bevy game scaffold with async I/O, parallel compute, and PostgreSQL"
+publish = false
+
+[features]
+default = ["graphics"]
+graphics = [
+    "bevy/default_app",
+    "bevy/bevy_winit",
+    "bevy/bevy_core_pipeline",
+    "bevy/bevy_sprite_render",
+]
+
+[dependencies]
+bevy = { version = "0.19.1", default-features = false, features = ["std", "async_executor", "bevy_log"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+fastrand = "2.5"
+
+# Browser code shares game data, but never a native runtime or DB driver.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+bevy = { version = "0.19.1", default-features = false, features = ["multi_threaded", "x11", "wayland"] }
+clap = { version = "4.5", features = ["derive"] }
+color-eyre = "0.6"
+rayon = "1.12"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "macros", "migrate"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "net"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+bevy = { version = "0.19.1", default-features = false, features = ["webgl2"] }
+fastrand = { version = "2.5", features = ["js"] }
+
+[package.metadata.bevy_cli.web]
+wasm-opt = false
+
+[lints.rust]
+unsafe_code = "forbid"
+
+# Inspired by https://www.namtao.com/rust/.
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+unchecked_time_subtraction = "deny"
+todo = "deny"
+string_slice = "deny"
+panic_in_result_fn = "deny"
+panic = "deny"
+exit = "deny"
+as_conversions = "deny"
+
+# Enable a small amount of optimization in the dev profile.
+[profile.dev]
+opt-level = 1
+
+# Enable a large amount of optimization in the dev profile for dependencies.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+# Compile the entire crate as one unit.
+# Slows compile times, marginal improvements.
+codegen-units = 1
+# Do a second optimization pass over the entire program, including dependencies.
+# Slows compile times, marginal improvements.
+lto = "thin"

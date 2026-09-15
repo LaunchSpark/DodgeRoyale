@@ -1,0 +1,65 @@
+name: dodge-royale
+
+services:
+  web:
+    build:
+      context: .
+      target: web
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8080}:8080"
+
+  db:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dodgeroyale}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dodgeroyale}
+      POSTGRES_DB: ${POSTGRES_DB:-dodgeroyale}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  app:
+    build:
+      context: .
+      target: runtime
+    init: true
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-dodgeroyale}:${POSTGRES_PASSWORD:-dodgeroyale}@db:5432/${POSTGRES_DB:-dodgeroyale}
+      RUST_LOG: ${RUST_LOG:-info}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Example: docker compose run --rm dev cargo check --locked --all-targets
+  dev:
+    profiles: ["tools"]
+    build:
+      context: .
+      target: development
+    init: true
+    working_dir: /workspace
+    command: ["sleep", "infinity"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-dodgeroyale}:${POSTGRES_PASSWORD:-dodgeroyale}@db:5432/${POSTGRES_DB:-dodgeroyale}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - .:/workspace
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/workspace/target
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  cargo-registry:
+  cargo-git:
+  cargo-target:

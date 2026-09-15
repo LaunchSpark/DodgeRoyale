@@ -1,0 +1,9 @@
+.git
+.agents
+.codex
+.DS_Store
+target
+.env
+.env.*
+!.env.example
+*.log
