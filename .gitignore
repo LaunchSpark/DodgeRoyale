@@ -22,3 +22,6 @@ target/
 !.env.example
 .DS_Store
 *.log
+
+# Third-party reference material (not redistributable)
+reference/

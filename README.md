@@ -2,8 +2,9 @@
 
 A browser-rendered Bevy prototype: move a white pixelated orb through a 6,000 × 4,000
 world with smooth acceleration and a camera that follows your movement. The blue
-arena, circular player, and shrinking trail take inspiration from artridge's **Dodge**; the supplied
-Lua reference remains in [`reference/code.lua`](reference/code.lua).
+arena, circular player, and shrinking trail take inspiration from artridge's
+[**Dodge**](https://www.lexaloffle.com/bbs/?tid=34986). Its Lua source is kept locally
+in `reference/code.lua`, which is gitignored and not distributed with this repository.
 
 Use **WASD** or the **arrow keys** to move. **R** recenters the camera on its current
 follow target. Click the canvas or **Focus game** to restore keyboard focus.
