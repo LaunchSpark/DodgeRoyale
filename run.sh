@@ -8,7 +8,16 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# rustup edits the saved PATH, but shells opened before the install miss it.
+if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
+    PATH="$HOME/.cargo/bin:$PATH"
+fi
+
 BIN=target/debug/dodge-royale
+# Windows appends .exe; nm does not resolve the bare name the way exec does.
+case "$(uname -s)" in
+MINGW* | MSYS* | CYGWIN*) BIN="$BIN.exe" ;;
+esac
 
 restore_graphics() {
     echo "--> restoring graphics build"
@@ -26,7 +35,8 @@ restore_on_exit() {
 # trip pipefail, making a healthy binary look headless.
 assert_graphics() {
     local symbols
-    symbols=$(nm -U "$BIN" 2>/dev/null | grep -c bevy_render || true)
+    # --defined-only, not -U: GNU nm reads -U as --unicode and eats the path.
+    symbols=$(nm --defined-only "$BIN" 2>/dev/null | grep -c bevy_render || true)
     if [ "${symbols:-0}" -eq 0 ]; then
         echo "ERROR: $BIN has no renderer (headless build). Run: ./run.sh build" >&2
         exit 1
