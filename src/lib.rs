@@ -11,6 +11,7 @@ pub mod enemy_types;
 pub mod model;
 pub mod rng;
 pub mod scale;
+pub mod simulation;
 pub mod torus;
 pub mod tween;
 

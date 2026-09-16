@@ -2,7 +2,8 @@
 
 use bevy::{camera::ScalingMode, prelude::*};
 
-use super::player::{Player, Velocity, move_player};
+use super::player::{Player, Velocity};
+use crate::simulation::PlayerSet;
 
 use super::screen::Screen;
 
@@ -24,7 +25,7 @@ impl Plugin for FollowCameraPlugin {
             .add_systems(
                 Update,
                 follow_player
-                    .after(move_player)
+                    .after(PlayerSet::Move)
                     .run_if(in_state(Screen::Playing)),
             );
     }

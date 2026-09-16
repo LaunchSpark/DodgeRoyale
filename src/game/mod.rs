@@ -32,7 +32,6 @@ pub fn build_app() -> App {
     .init_resource::<art::ActiveTheme>()
     .insert_resource(ClearColor(art::ActiveTheme::default().background()))
     .add_plugins((
-        crate::rng::SeededRngPlugin,
         screen::ScreenPlugin,
         menu::MenuPlugin,
         config::ConfigPlugin,

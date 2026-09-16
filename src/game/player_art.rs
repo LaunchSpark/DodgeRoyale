@@ -10,11 +10,12 @@ use bevy::{
 use super::{
     art::{ActiveTheme, ink},
     ghost::Ghosted,
-    player::{Player, move_player},
+    player::Player,
     screen::{GameEntity, Screen},
 };
 use crate::art::{PIXEL, SHADOW_OFFSET};
 use crate::scale::WORLD_HALF_EXTENTS;
+use crate::simulation::PlayerSet;
 use crate::torus::{nearest_image, wrap_position};
 
 const DIAMETER: f32 = 9.0 * PIXEL;
@@ -86,7 +87,7 @@ impl Plugin for PlayerArtPlugin {
             Update,
             (age_trail, emit_trail)
                 .chain()
-                .after(move_player)
+                .after(PlayerSet::Move)
                 .run_if(in_state(Screen::Playing)),
         );
     }

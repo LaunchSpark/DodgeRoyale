@@ -2,25 +2,31 @@ use bevy::prelude::*;
 
 use crate::art::shadow_translation;
 pub(super) use crate::enemy::Velocity2d as Velocity;
-use crate::enemy_types::Defeated;
-pub(super) use crate::motion::PLAYER_HALF_SIZE;
-use crate::motion::advance_motion;
-use crate::{collision::Collider, enemy::EnemyTarget};
+pub(super) use crate::simulation::Player;
+use crate::simulation::{PlayerIntent, PlayerSet, spawn_player_body};
 
 use super::art::{ActiveTheme, ink};
 use super::ghost::Ghosted;
 use super::player_art::{PlayerArt, TrailEmitter};
 use super::screen::{GameEntity, Screen};
 
-#[derive(Component)]
-pub(super) struct Player;
+/// How high the player draws above the arena floor.
+const PLAYER_Z: f32 = 10.0;
 
 pub(super) struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(Screen::Playing), spawn_player)
-            .add_systems(Update, move_player.run_if(in_state(Screen::Playing)));
+            // The keyboard is one writer of intent; a policy would be another.
+            // Either way the write lands before the simulation integrates it,
+            // so a key pressed this frame moves the player this frame.
+            .add_systems(
+                Update,
+                read_keyboard
+                    .before(PlayerSet::Move)
+                    .run_if(in_state(Screen::Playing)),
+            );
     }
 }
 
@@ -35,13 +41,9 @@ fn spawn_player(mut commands: Commands, theme: Res<ActiveTheme>, art: Res<Player
         // The camera lags a seam crossing, so without this the player draws a
         // world away from it for a few frames and vanishes.
         Ghosted,
-        Player,
-        EnemyTarget,
-        Collider::rectangle(Vec2::splat(PLAYER_HALF_SIZE)),
-        Velocity::default(),
+        spawn_player_body(Vec3::new(0.0, 0.0, PLAYER_Z)),
         TrailEmitter::default(),
         art.sprite(ink()),
-        Transform::from_xyz(0.0, 0.0, 10.0),
         children![(
             Name::new("Player shadow"),
             art.sprite(theme.shadow()),
@@ -50,20 +52,12 @@ fn spawn_player(mut commands: Commands, theme: Res<ActiveTheme>, art: Res<Player
     ));
 }
 
+/// Turn the held keys into a direction for the simulation to integrate.
 #[expect(
     clippy::needless_pass_by_value,
     reason = "Bevy system parameters are injected by value"
 )]
-pub(super) fn move_player(
-    keys: Res<ButtonInput<KeyCode>>,
-    time: Res<Time>,
-    player: Single<(&mut Transform, &mut Velocity, Option<&Defeated>), With<Player>>,
-) {
-    let (mut transform, mut velocity, defeated) = player.into_inner();
-    if defeated.is_some() {
-        velocity.0 = Vec2::ZERO;
-        return;
-    }
+fn read_keyboard(keys: Res<ButtonInput<KeyCode>>, mut players: Query<&mut PlayerIntent>) {
     let direction = Vec2::new(
         input_axis(
             keys.any_pressed([KeyCode::KeyA, KeyCode::ArrowLeft]),
@@ -74,14 +68,9 @@ pub(super) fn move_player(
             keys.any_pressed([KeyCode::KeyW, KeyCode::ArrowUp]),
         ),
     );
-    let position = advance_motion(
-        transform.translation.truncate(),
-        &mut velocity.0,
-        direction,
-        time.delta_secs(),
-    );
-    transform.translation.x = position.x;
-    transform.translation.y = position.y;
+    for mut intent in &mut players {
+        intent.0 = direction;
+    }
 }
 
 const fn input_axis(negative: bool, positive: bool) -> f32 {

@@ -3,16 +3,16 @@
 use super::{
     art::{ActiveTheme, ink},
     ghost::Ghosted,
-    player::{Player, move_player},
+    player::Player,
     screen::{GameEntity, Screen, Transition},
 };
 use crate::{
     art::{PIXEL, shadow_translation},
     collision::Collider,
-    enemy::{EnemyPlugin, EnemySet, EnemyWorld},
-    enemy_population::{EnemyPopulationPlugin, EnemySpawnQueue, EnemyType},
-    enemy_types::{EnemyKind, KamikazeBlast, PlayerHit, ReferenceEnemyPlugin},
-    motion::WORLD_HALF_EXTENTS,
+    enemy::EnemySet,
+    enemy_population::{EnemySpawnQueue, EnemyType},
+    enemy_types::{EnemyKind, KamikazeBlast, PlayerHit},
+    simulation::{SimulationPlugin, SimulationSet},
 };
 use bevy::prelude::*;
 
@@ -20,26 +20,12 @@ pub(super) struct GameEnemyPlugin;
 
 impl Plugin for GameEnemyPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((EnemyPlugin, EnemyPopulationPlugin, ReferenceEnemyPlugin))
-            .insert_resource(EnemyWorld {
-                half_extents: Some(WORLD_HALF_EXTENTS),
-                ..default()
-            })
-            .configure_sets(
-                Update,
-                (
-                    EnemySet::Prepare.after(move_player),
-                    EnemySet::Steer,
-                    EnemySet::Modifiers,
-                    EnemySet::Move,
-                    EnemySet::Deaths,
-                    EnemySet::Contacts,
-                    EnemySet::Effects,
-                    EnemySet::Cleanup,
-                    EnemySet::Replenish,
-                )
-                    .run_if(in_state(Screen::Playing)),
-            )
+        // The simulation owns the enemies, the player and their ordering; this
+        // plugin only decorates what it spawns and reacts to what it reports.
+        app.add_plugins(SimulationPlugin)
+            // Menus and the config screen freeze the whole simulation, which is
+            // one condition on one gate rather than one per system set.
+            .configure_sets(Update, SimulationSet.run_if(in_state(Screen::Playing)))
             .add_systems(
                 Update,
                 (decorate_enemies, decorate_blasts, sync_outlines)
