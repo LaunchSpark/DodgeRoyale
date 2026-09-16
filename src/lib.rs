@@ -8,6 +8,8 @@ pub mod database;
 pub mod enemy;
 pub mod enemy_population;
 pub mod enemy_types;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod gym;
 pub mod model;
 pub mod observation;
 pub mod rng;

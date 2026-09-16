@@ -152,7 +152,7 @@ pub struct Section {
 pub struct Layout {
     /// Bumped whenever the meaning of any value changes.
     pub version: u32,
-    pub dtype: &'static str,
+    pub dtype: String,
     pub grid: usize,
     pub cell_pixels: u32,
     pub window_pixels: u32,
@@ -160,9 +160,9 @@ pub struct Layout {
     pub world_units_per_pixel: f32,
     pub velocity_scale: f32,
     /// Positive Y points down, as it does on a screen.
-    pub y_axis: &'static str,
-    pub channels: Vec<&'static str>,
-    pub actions: Vec<&'static str>,
+    pub y_axis: String,
+    pub channels: Vec<String>,
+    pub actions: Vec<String>,
     pub horizons: Vec<u32>,
     pub hold_frames: u32,
     /// Path samples are divided by this, so they match the window's half width.
@@ -179,15 +179,21 @@ pub fn layout(hold_frames: u32) -> Layout {
     let grid_values = CHANNELS.len().saturating_mul(CELLS);
     Layout {
         version: 1,
-        dtype: "f32",
+        dtype: "f32".to_owned(),
         grid: GRID,
         cell_pixels: 4,
         window_pixels: 256,
         world_units_per_pixel: PIXEL,
         velocity_scale: VELOCITY_SCALE,
-        y_axis: "down",
-        channels: CHANNELS.iter().map(|channel| channel.name()).collect(),
-        actions: Action::ALL.iter().map(|action| action.name()).collect(),
+        y_axis: "down".to_owned(),
+        channels: CHANNELS
+            .iter()
+            .map(|channel| channel.name().to_owned())
+            .collect(),
+        actions: Action::ALL
+            .iter()
+            .map(|action| action.name().to_owned())
+            .collect(),
         horizons: SAMPLE_FRAMES.to_vec(),
         hold_frames,
         path_scale: WINDOW_HALF,
