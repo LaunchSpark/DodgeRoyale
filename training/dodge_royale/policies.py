@@ -68,6 +68,16 @@ class _FieldLogits(nn.Module):
 class VelocityFlowRoyalePolicy(ActorCriticPolicy):
     """ActorCritic whose logits come from the field, not from a learned head."""
 
+    def __init__(self, *args, architecture: str = ROYALE_ARCHITECTURE, **kwargs) -> None:
+        # Accepted and kept here rather than forwarded: SB3 splats
+        # `policy_kwargs` straight into this constructor, so a name recorded
+        # there would otherwise reach `ActorCriticPolicy.__init__` as an
+        # unexpected keyword. Swallowing it is what lets the name live in the
+        # saved kwargs, which is the only part of a checkpoint that can say
+        # what architecture wrote it.
+        self.architecture = architecture
+        super().__init__(*args, **kwargs)
+
     def _build(self, lr_schedule) -> None:
         super()._build(lr_schedule)
         actions = len(self.features_extractor.layout.actions)
@@ -90,6 +100,7 @@ def policy_kwargs_for(layout: Layout) -> dict[str, Any]:
     which is the thing this architecture exists not to have.
     """
     return {
+        "architecture": ROYALE_ARCHITECTURE,
         "features_extractor_class": VelocityFlowRoyaleExtractor,
         "features_extractor_kwargs": {"layout": layout.as_dict()},
         "net_arch": {"pi": [], "vf": [VALUE_FEATURES]},

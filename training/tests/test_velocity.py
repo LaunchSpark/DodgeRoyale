@@ -19,6 +19,7 @@ from dodge_royale.policies import (
     ROYALE_ARCHITECTURE,
     VelocityFlowRoyalePolicy,
     _FieldLogits,
+    checkpoint_architecture,
     checkpoint_layout,
     policy_kwargs_for,
     require_loadable,
@@ -754,3 +755,57 @@ def test_sample_points_converts_rather_than_assuming_the_identity(layout):
     assert not torch.equal(converted, paths), "and it is no longer the identity"
     # The shipped layout is still exactly the identity, with no arithmetic.
     assert torch.equal(sample_points(paths, layout), paths)
+
+
+# --- the recorded architecture name --------------------------------------
+
+
+def test_a_saved_checkpoint_records_the_architecture_that_wrote_it(tmp_path, layout):
+    """The name has to survive into the zip, not just exist in memory.
+
+    SB3 splats `policy_kwargs` into the policy constructor, so a name recorded
+    there only works because the policy accepts and swallows it. If that ever
+    stops being true this fails at construction, and if the key stops being
+    saved it fails here -- either way, before the fallback can quietly cover
+    for it.
+    """
+    from stable_baselines3 import PPO
+    from stable_baselines3.common.save_util import load_from_zip_file
+
+    model = PPO(
+        **ARCHITECTURES[ROYALE_ARCHITECTURE].ppo_kwargs(layout),
+        env=_DummyEnv(layout),
+        n_steps=8,
+        batch_size=8,
+        device="cpu",
+    )
+    assert model.policy.architecture == ROYALE_ARCHITECTURE
+
+    path = tmp_path / "named.zip"
+    model.save(path)
+    data, _, _ = load_from_zip_file(path, load_data=True, device="cpu")
+    assert data["policy_kwargs"]["architecture"] == ROYALE_ARCHITECTURE, (
+        "the name must be in the saved kwargs, not only on the live object"
+    )
+    assert checkpoint_architecture(path) == ROYALE_ARCHITECTURE
+    assert PPO.load(path, device="cpu").policy.architecture == ROYALE_ARCHITECTURE
+
+
+def test_a_checkpoint_naming_another_architecture_is_refused(tmp_path, layout):
+    """Proves the recorded name is what decides, not the extractor class.
+
+    This checkpoint uses the Royale extractor and the Royale policy, so the
+    class-identity fallback would call it ours. Only the recorded name says
+    otherwise, so if that branch were dead this would be accepted.
+    """
+    from stable_baselines3 import PPO
+
+    kwargs = ARCHITECTURES[ROYALE_ARCHITECTURE].ppo_kwargs(layout)
+    kwargs["policy_kwargs"] = {**kwargs["policy_kwargs"], "architecture": "velocity-flow-v2"}
+    model = PPO(**kwargs, env=_DummyEnv(layout), n_steps=8, batch_size=8, device="cpu")
+    path = tmp_path / "foreign-name.zip"
+    model.save(path)
+
+    assert checkpoint_architecture(path) == "velocity-flow-v2"
+    with pytest.raises(ProtocolError, match="only builds"):
+        require_loadable(path, layout)
