@@ -434,10 +434,23 @@ impl HeadlessArena {
     }
 
     /// Ask for a direction on the next step. Length is ignored; zero coasts.
-    pub fn set_intent(&mut self, direction: Vec2) {
+    ///
+    /// # Errors
+    ///
+    /// [`ArenaError::NonFinite`] for a direction that is not a finite number.
+    /// A NaN here would reach the player's position and, from there, every
+    /// observation the arena produces, so it is refused at the door -- the
+    /// same rule [`predict_path`] applies to its inputs.
+    pub fn set_intent(&mut self, direction: Vec2) -> Result<(), ArenaError> {
+        if !direction.is_finite() {
+            return Err(ArenaError::NonFinite(
+                "an intent must be a finite direction",
+            ));
+        }
         if let Some(mut intent) = self.app.world_mut().get_mut::<PlayerIntent>(self.player) {
             intent.0 = direction;
         }
+        Ok(())
     }
 
     /// Advance exactly one 60 Hz frame.
@@ -802,8 +815,8 @@ impl HeadlessArena {
     /// rather than silently idling.
     pub fn set_action(&mut self, action: u8) -> Result<(), ArenaError> {
         let action = Action::from_byte(action).ok_or(ArenaError::InvalidAction(action))?;
-        self.set_intent(action.direction());
-        Ok(())
+        // Every action's direction is a literal, so this cannot fail.
+        self.set_intent(action.direction())
     }
 
     /// Every action's path from where the player is now.

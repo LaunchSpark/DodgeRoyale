@@ -40,13 +40,22 @@ fn player_of(app: &mut App) -> (Vec2, Vec2) {
     (transform.translation.truncate(), velocity.0)
 }
 
+/// A stand-in for the keyboard: writes intent during the update, the way the
+/// game's own input system and a policy both would.
+fn write_rightward_intent(mut players: Query<&mut PlayerIntent>) {
+    for mut intent in &mut players {
+        intent.0 = Vec2::X;
+    }
+}
+
 #[test]
 fn intent_written_this_update_moves_the_player_in_the_same_update() {
     let mut app = app();
-    let player = app.world_mut().spawn(spawn_player_body(Vec3::ZERO)).id();
-    app.world_mut()
-        .entity_mut(player)
-        .insert(PlayerIntent(Vec2::X));
+    // Scheduled, not pre-inserted: this is what proves an intent written
+    // during the update reaches movement in that same update rather than
+    // arriving a frame late.
+    app.add_systems(Update, write_rightward_intent.before(PlayerSet::Move));
+    app.world_mut().spawn(spawn_player_body(Vec3::ZERO));
 
     step(&mut app);
 
@@ -186,7 +195,7 @@ fn player_position(arena: &mut HeadlessArena) -> Vec2 {
 #[test]
 fn the_first_step_advances_exactly_one_frame_of_movement() {
     let mut arena = empty_arena(600);
-    arena.set_intent(Vec2::X);
+    arena.set_intent(Vec2::X).expect("a finite direction");
 
     let result = arena.step().expect("the first step runs");
 
@@ -475,7 +484,14 @@ fn the_same_seed_and_actions_replay_the_same_run() {
         })
         .expect("the arena fills");
         for frame in 0..600 {
-            arena.set_intent(intents[frame % intents.len()]);
+            arena
+                .set_intent(
+                    intents
+                        .get(frame % intents.len())
+                        .copied()
+                        .unwrap_or(Vec2::ZERO),
+                )
+                .expect("a finite direction");
             if arena.done() {
                 break;
             }
@@ -525,7 +541,7 @@ fn reset_reproduces_a_seed_exactly() {
     })
     .expect("the arena fills");
     for _ in 0..20 {
-        first.set_intent(Vec2::X);
+        first.set_intent(Vec2::X).expect("a finite direction");
         first.step().expect("a step inside the budget");
     }
     let expected = first.view();
@@ -540,7 +556,7 @@ fn reset_reproduces_a_seed_exactly() {
     second.step().expect("a step on the old seed");
     second.reset(5).expect("reset to the first arena's seed");
     for _ in 0..20 {
-        second.set_intent(Vec2::X);
+        second.set_intent(Vec2::X).expect("a finite direction");
         second.step().expect("a step inside the budget");
     }
 
@@ -620,7 +636,7 @@ fn simulated_path(
     }
     // An optional run-up, so the prediction starts from a moving player.
     if let Some((direction, frames)) = warmup {
-        arena.set_intent(direction);
+        arena.set_intent(direction).expect("a finite direction");
         for _ in 0..frames {
             arena.step().expect("warm-up steps run");
         }
@@ -628,11 +644,13 @@ fn simulated_path(
     let mut samples = [Vec2::ZERO; SAMPLE_COUNT];
     let mut next = 0;
     for frame in 1..=HORIZON {
-        arena.set_intent(if frame <= hold_frames {
-            action.direction()
-        } else {
-            Vec2::ZERO
-        });
+        arena
+            .set_intent(if frame <= hold_frames {
+                action.direction()
+            } else {
+                Vec2::ZERO
+            })
+            .expect("a finite direction");
         arena.step().expect("a step inside the budget");
         while SAMPLE_FRAMES.get(next).is_some_and(|at| *at == frame) {
             if let Some(slot) = samples.get_mut(next) {
@@ -665,7 +683,7 @@ fn predicted_path(
                 .world_mut()
                 .entity_mut(player)
                 .insert(Transform::from_translation(start.extend(0.0)));
-            arena.set_intent(direction);
+            arena.set_intent(direction).expect("a finite direction");
             for _ in 0..frames {
                 arena.step().expect("warm-up steps run");
             }
@@ -810,7 +828,7 @@ fn prediction_leaves_the_arena_untouched() {
         ..ArenaConfig::default()
     })
     .expect("the arena fills");
-    arena.set_intent(Vec2::X);
+    arena.set_intent(Vec2::X).expect("a finite direction");
     arena.step().expect("one step before predicting");
     let before = arena.view();
 
@@ -892,4 +910,16 @@ fn non_finite_prediction_inputs_fail_instead_of_reaching_an_observation() {
     assert!(matches!(bad, Err(ArenaError::NonFinite(_))));
     let bad = predict_path(Vec2::ZERO, Vec2::ZERO, Vec2::new(f32::NAN, 1.0), 24);
     assert!(matches!(bad, Err(ArenaError::NonFinite(_))));
+}
+
+#[test]
+fn a_non_finite_intent_is_refused_before_it_can_reach_the_world() {
+    let mut arena = empty_arena(60);
+    assert!(matches!(
+        arena.set_intent(Vec2::new(f32::NAN, 0.0)),
+        Err(ArenaError::NonFinite(_))
+    ));
+    arena.step().expect("the step still runs");
+    let position = arena.view().player.expect("a player").position;
+    assert!(position.is_finite(), "the world never saw the NaN");
 }
