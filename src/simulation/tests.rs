@@ -593,3 +593,303 @@ fn an_empty_population_is_allowed_for_controlled_tests() {
     assert!(arena.view().enemies.is_empty());
     assert!(arena.step().is_ok());
 }
+
+// --- actions and predicted paths ---------------------------------------
+
+/// Walk a real arena with one action held for `hold_frames`, sampling where
+/// the player actually is at each horizon.
+fn simulated_path(
+    action: Action,
+    hold_frames: u32,
+    start: Vec2,
+    warmup: Option<(Vec2, u32)>,
+) -> [Vec2; SAMPLE_COUNT] {
+    let mut arena = HeadlessArena::new(ArenaConfig {
+        seed: 1,
+        enemy_count: 0,
+        max_frames: 10_000,
+        ..ArenaConfig::default()
+    })
+    .expect("an empty arena builds");
+    if start != Vec2::ZERO {
+        let player = arena.player();
+        arena
+            .world_mut()
+            .entity_mut(player)
+            .insert(Transform::from_translation(start.extend(0.0)));
+    }
+    // An optional run-up, so the prediction starts from a moving player.
+    if let Some((direction, frames)) = warmup {
+        arena.set_intent(direction);
+        for _ in 0..frames {
+            arena.step().expect("warm-up steps run");
+        }
+    }
+    let mut samples = [Vec2::ZERO; SAMPLE_COUNT];
+    let mut next = 0;
+    for frame in 1..=HORIZON {
+        arena.set_intent(if frame <= hold_frames {
+            action.direction()
+        } else {
+            Vec2::ZERO
+        });
+        arena.step().expect("a step inside the budget");
+        while SAMPLE_FRAMES.get(next).is_some_and(|at| *at == frame) {
+            if let Some(slot) = samples.get_mut(next) {
+                *slot = arena.view().player.expect("a player").position;
+            }
+            next = next.saturating_add(1);
+        }
+    }
+    samples
+}
+
+fn predicted_path(
+    action: Action,
+    hold_frames: u32,
+    start: Vec2,
+    warmup: Option<(Vec2, u32)>,
+) -> [Vec2; SAMPLE_COUNT] {
+    let (position, velocity) = match warmup {
+        None => (start, Vec2::ZERO),
+        Some((direction, frames)) => {
+            let mut arena = HeadlessArena::new(ArenaConfig {
+                seed: 1,
+                enemy_count: 0,
+                max_frames: 10_000,
+                ..ArenaConfig::default()
+            })
+            .expect("an empty arena builds");
+            let player = arena.player();
+            arena
+                .world_mut()
+                .entity_mut(player)
+                .insert(Transform::from_translation(start.extend(0.0)));
+            arena.set_intent(direction);
+            for _ in 0..frames {
+                arena.step().expect("warm-up steps run");
+            }
+            let view = arena.view();
+            let player = view.player.expect("a player");
+            (player.position, player.velocity)
+        }
+    };
+    predict_path(position, velocity, action.direction(), hold_frames).expect("finite inputs")
+}
+
+fn assert_paths_agree(action: Action, hold: u32, start: Vec2, warmup: Option<(Vec2, u32)>) {
+    let predicted = predicted_path(action, hold, start, warmup);
+    let simulated = simulated_path(action, hold, start, warmup);
+    for (index, (left, right)) in predicted.iter().zip(simulated.iter()).enumerate() {
+        let frame = SAMPLE_FRAMES[index];
+        // A world unit is a sixth of a reference pixel; agreement well inside
+        // one unit is agreement inside the encoder's cell by a wide margin.
+        assert!(
+            left.distance(*right) < 0.5,
+            "{} hold {hold} at frame {frame}: predicted {left:?}, simulated {right:?}",
+            action.name()
+        );
+    }
+}
+
+#[test]
+fn every_action_predicts_where_the_arena_actually_goes_from_rest() {
+    for action in Action::ALL {
+        assert_paths_agree(action, DEFAULT_HOLD_FRAMES, Vec2::ZERO, None);
+    }
+}
+
+#[test]
+fn prediction_agrees_with_the_arena_from_a_moving_start() {
+    // Run right for half a second first, then predict each action from the
+    // momentum that leaves behind.
+    for action in Action::ALL {
+        assert_paths_agree(action, DEFAULT_HOLD_FRAMES, Vec2::ZERO, Some((Vec2::X, 30)));
+    }
+}
+
+#[test]
+fn prediction_agrees_for_every_hold_length() {
+    for hold in [0, 1, DEFAULT_HOLD_FRAMES, 108] {
+        assert_paths_agree(Action::Right, hold, Vec2::ZERO, None);
+        assert_paths_agree(Action::UpLeft, hold, Vec2::ZERO, Some((Vec2::Y, 20)));
+    }
+}
+
+#[test]
+fn a_released_action_brakes_instead_of_stopping_dead() {
+    let path = predicted_path(Action::Right, 4, Vec2::ZERO, None);
+    let travelled: Vec<f32> = path.iter().map(|point| point.x).collect();
+    assert!(travelled[0] > 0.0, "the held frames move the player");
+    for pair in travelled.windows(2) {
+        assert!(
+            pair[1] >= pair[0] - 0.001,
+            "coasting carries on in the same direction: {travelled:?}"
+        );
+    }
+    // In reference pixels, which is what the design reasons in: four frames of
+    // input plus coasting is about ten pixels of momentum, not a journey.
+    let last = travelled[SAMPLE_COUNT - 1] / crate::scale::PIXEL;
+    assert!(
+        (8.0..12.0).contains(&last),
+        "four frames of input carries about ten pixels, not {last}"
+    );
+}
+
+#[test]
+fn idle_predicts_braking_from_a_moving_start() {
+    let moving = predicted_path(
+        Action::Idle,
+        DEFAULT_HOLD_FRAMES,
+        Vec2::ZERO,
+        Some((Vec2::X, 30)),
+    );
+    let gaps: Vec<f32> = moving
+        .windows(2)
+        .map(|pair| pair[1].x - pair[0].x)
+        .collect();
+    assert!(gaps[0] > 0.0, "momentum carries the player on");
+    assert!(
+        gaps.last().copied().unwrap_or(1.0) < gaps[0],
+        "and decays rather than continuing forever: {gaps:?}"
+    );
+}
+
+#[test]
+fn a_reversal_turns_the_player_around() {
+    let path = predicted_path(
+        Action::Left,
+        DEFAULT_HOLD_FRAMES,
+        Vec2::ZERO,
+        Some((Vec2::X, 30)),
+    );
+    assert!(
+        path[SAMPLE_COUNT - 1].x < path[0].x,
+        "holding left against rightward momentum ends up further left: {path:?}"
+    );
+}
+
+#[test]
+fn a_diagonal_is_no_faster_than_a_cardinal() {
+    let straight = predicted_path(Action::Right, 108, Vec2::ZERO, None);
+    let diagonal = predicted_path(Action::UpRight, 108, Vec2::ZERO, None);
+    let straight_distance = straight[SAMPLE_COUNT - 1].length();
+    let diagonal_distance = diagonal[SAMPLE_COUNT - 1].length();
+    assert!(
+        (straight_distance - diagonal_distance).abs() < 0.5,
+        "normalisation keeps both at the same speed: {straight_distance} against {diagonal_distance}"
+    );
+}
+
+#[test]
+fn predicted_paths_cross_both_seams_the_way_the_arena_does() {
+    let half = crate::scale::WORLD_HALF_EXTENTS;
+    // Start a few units inside each edge, heading out of the world.
+    let cases = [
+        (Action::Right, Vec2::new(half.x - 5.0, 0.0)),
+        (Action::Up, Vec2::new(0.0, half.y - 5.0)),
+    ];
+    for (action, start) in cases {
+        let path = predicted_path(action, 108, start, None);
+        for point in path {
+            assert!(
+                point.x.abs() <= half.x && point.y.abs() <= half.y,
+                "a wrapped path stays inside the world: {point:?}"
+            );
+        }
+        assert_paths_agree(action, 108, start, None);
+    }
+}
+
+#[test]
+fn prediction_leaves_the_arena_untouched() {
+    let mut arena = HeadlessArena::new(ArenaConfig {
+        seed: 12,
+        enemy_count: 20,
+        max_frames: 600,
+        ..ArenaConfig::default()
+    })
+    .expect("the arena fills");
+    arena.set_intent(Vec2::X);
+    arena.step().expect("one step before predicting");
+    let before = arena.view();
+
+    let paths = arena
+        .predict_paths(DEFAULT_HOLD_FRAMES)
+        .expect("finite state");
+
+    assert_eq!(arena.view(), before, "predicting is not playing");
+    assert_eq!(paths.len(), 9, "one path per action");
+    let path_of = |action: Action| {
+        *paths
+            .get(usize::from(action.index()))
+            .expect("every action has a path")
+    };
+    assert_ne!(
+        path_of(Action::Left),
+        path_of(Action::Right),
+        "and the actions are actually different"
+    );
+}
+
+#[test]
+fn predicted_paths_start_from_the_players_momentum() {
+    let at_rest =
+        predict_path(Vec2::ZERO, Vec2::ZERO, Action::Idle.direction(), 24).expect("finite inputs");
+    let moving = predict_path(
+        Vec2::ZERO,
+        Vec2::new(900.0, 0.0),
+        Action::Idle.direction(),
+        24,
+    )
+    .expect("finite inputs");
+    assert!(
+        moving[0].x > at_rest[0].x,
+        "a moving player's idle path is not a standing one"
+    );
+}
+
+#[test]
+fn action_bytes_are_the_protocol_order() {
+    let names: Vec<&str> = Action::ALL.iter().map(|action| action.name()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "idle",
+            "left",
+            "right",
+            "up",
+            "down",
+            "up-left",
+            "up-right",
+            "down-left",
+            "down-right"
+        ]
+    );
+    for (index, action) in Action::ALL.iter().enumerate() {
+        let byte = u8::try_from(index).expect("nine actions fit a byte");
+        assert_eq!(Action::from_byte(byte), Some(*action));
+        assert_eq!(action.index(), byte);
+    }
+    assert_eq!(Action::from_byte(9), None, "there is no tenth action");
+}
+
+#[test]
+fn an_action_outside_the_table_is_rejected_rather_than_idled() {
+    let mut arena = empty_arena(60);
+    assert_eq!(
+        arena.set_action(9).err(),
+        Some(ArenaError::InvalidAction(9))
+    );
+    assert!(arena.set_action(8).is_ok(), "the ninth action is valid");
+}
+
+#[test]
+fn non_finite_prediction_inputs_fail_instead_of_reaching_an_observation() {
+    let bad = predict_path(Vec2::new(f32::NAN, 0.0), Vec2::ZERO, Vec2::X, 24);
+    assert!(matches!(bad, Err(ArenaError::NonFinite(_))));
+    let bad = predict_path(Vec2::ZERO, Vec2::new(0.0, f32::INFINITY), Vec2::X, 24);
+    assert!(matches!(bad, Err(ArenaError::NonFinite(_))));
+    let bad = predict_path(Vec2::ZERO, Vec2::ZERO, Vec2::new(f32::NAN, 1.0), 24);
+    assert!(matches!(bad, Err(ArenaError::NonFinite(_))));
+}

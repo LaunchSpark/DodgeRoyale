@@ -213,6 +213,10 @@ pub enum ArenaError {
     Population { placed: usize, requested: usize },
     /// The episode has already ended; reset before stepping again.
     Completed,
+    /// An action byte outside the nine actions.
+    InvalidAction(u8),
+    /// A position, velocity or direction that is not a finite number.
+    NonFinite(&'static str),
 }
 
 impl core::fmt::Display for ArenaError {
@@ -224,6 +228,10 @@ impl core::fmt::Display for ArenaError {
                 "placed {placed} of {requested} enemies before frame zero"
             ),
             Self::Completed => write!(formatter, "the episode has ended; reset before stepping"),
+            Self::InvalidAction(byte) => {
+                write!(formatter, "action {byte} is outside the nine actions")
+            }
+            Self::NonFinite(reason) => write!(formatter, "{reason}"),
         }
     }
 }
@@ -616,6 +624,212 @@ fn single_threaded(app: &mut App) {
         app.edit_schedule(label, |schedule| {
             schedule.set_executor(SingleThreadedExecutor::new());
         });
+    }
+}
+
+/// The frames a predicted path is sampled at.
+///
+/// Six, not one: a single danger value per cell cannot say "lethal now, clear
+/// in two seconds". The last reaches 1.8 seconds, far enough to see a threat
+/// cross the space the player is heading for.
+pub const SAMPLE_FRAMES: [u32; 6] = [4, 12, 24, 48, 72, 108];
+
+/// How many samples each predicted path carries.
+pub const SAMPLE_COUNT: usize = SAMPLE_FRAMES.len();
+
+/// The last frame a path is sampled at, and so the length of the walk.
+pub const HORIZON: u32 = 108;
+
+/// How long a predicted path assumes its action stays held, by default.
+///
+/// The agent chooses again every frame, so a path is a question -- "what if I
+/// committed to this for a moment?" -- not a promise. One frame of holding
+/// separates the nine actions by less than a cell, and holding for the whole
+/// horizon sends the far samples outside the observed window; 24 frames is
+/// roughly the time to reach full speed.
+pub const DEFAULT_HOLD_FRAMES: u32 = 24;
+
+/// The nine button states the agent chooses between.
+///
+/// The order is the protocol's: it is what an action byte means, and what the
+/// policy's nine logits are indexed by. Never reorder it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Action {
+    Idle,
+    Left,
+    Right,
+    Up,
+    Down,
+    UpLeft,
+    UpRight,
+    DownLeft,
+    DownRight,
+}
+
+impl Action {
+    /// Every action, in protocol order.
+    pub const ALL: [Self; 9] = [
+        Self::Idle,
+        Self::Left,
+        Self::Right,
+        Self::Up,
+        Self::Down,
+        Self::UpLeft,
+        Self::UpRight,
+        Self::DownLeft,
+        Self::DownRight,
+    ];
+
+    /// Read an action byte from the wire.
+    #[must_use]
+    pub const fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0 => Some(Self::Idle),
+            1 => Some(Self::Left),
+            2 => Some(Self::Right),
+            3 => Some(Self::Up),
+            4 => Some(Self::Down),
+            5 => Some(Self::UpLeft),
+            6 => Some(Self::UpRight),
+            7 => Some(Self::DownLeft),
+            8 => Some(Self::DownRight),
+            _ => None,
+        }
+    }
+
+    /// This action's index, which is the byte that names it.
+    #[must_use]
+    pub const fn index(self) -> u8 {
+        match self {
+            Self::Idle => 0,
+            Self::Left => 1,
+            Self::Right => 2,
+            Self::Up => 3,
+            Self::Down => 4,
+            Self::UpLeft => 5,
+            Self::UpRight => 6,
+            Self::DownLeft => 7,
+            Self::DownRight => 8,
+        }
+    }
+
+    /// The direction it asks for, in world axes: +y is up.
+    ///
+    /// Unnormalised on the diagonals; [`advance_motion`] normalises, so a
+    /// diagonal is no faster than a cardinal.
+    #[must_use]
+    pub const fn direction(self) -> Vec2 {
+        match self {
+            Self::Idle => Vec2::ZERO,
+            Self::Left => Vec2::new(-1.0, 0.0),
+            Self::Right => Vec2::new(1.0, 0.0),
+            Self::Up => Vec2::new(0.0, 1.0),
+            Self::Down => Vec2::new(0.0, -1.0),
+            Self::UpLeft => Vec2::new(-1.0, 1.0),
+            Self::UpRight => Vec2::new(1.0, 1.0),
+            Self::DownLeft => Vec2::new(-1.0, -1.0),
+            Self::DownRight => Vec2::new(1.0, -1.0),
+        }
+    }
+
+    /// The name used in logs and in the protocol handshake.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Up => "up",
+            Self::Down => "down",
+            Self::UpLeft => "up-left",
+            Self::UpRight => "up-right",
+            Self::DownLeft => "down-left",
+            Self::DownRight => "down-right",
+        }
+    }
+}
+
+/// Where a direction takes the player, at [`SAMPLE_FRAMES`].
+///
+/// Pure: it copies the position and velocity it is given and touches neither
+/// the world nor its randomness. The input is held for `hold_frames` and
+/// released after that, and the walk always stops at the last horizon however
+/// long the hold is.
+///
+/// # Errors
+///
+/// [`ArenaError::NonFinite`] if a caller offers a position, velocity or
+/// direction that is not finite, rather than letting it reach an observation.
+pub fn predict_path(
+    position: Vec2,
+    velocity: Vec2,
+    direction: Vec2,
+    hold_frames: u32,
+) -> Result<[Vec2; SAMPLE_COUNT], ArenaError> {
+    if !position.is_finite() || !velocity.is_finite() || !direction.is_finite() {
+        return Err(ArenaError::NonFinite(
+            "predicted paths need finite position, velocity and direction",
+        ));
+    }
+    let mut position = position;
+    let mut velocity = velocity;
+    let mut samples = [Vec2::ZERO; SAMPLE_COUNT];
+    let mut pending = SAMPLE_FRAMES.iter().zip(samples.iter_mut()).peekable();
+    // The walk is bounded by the horizon, never by the hold: a hold of a
+    // thousand frames still costs a hundred and eight steps.
+    for frame in 1..=HORIZON {
+        let held = if frame <= hold_frames {
+            direction
+        } else {
+            Vec2::ZERO
+        };
+        position = advance_motion(position, &mut velocity, held, FRAME_SECONDS);
+        while pending.peek().is_some_and(|(at, _)| **at == frame) {
+            if let Some((_, slot)) = pending.next() {
+                *slot = position;
+            }
+        }
+    }
+    Ok(samples)
+}
+
+impl HeadlessArena {
+    /// Ask for an action on the next step.
+    ///
+    /// # Errors
+    ///
+    /// [`ArenaError::InvalidAction`] for a byte outside the nine actions,
+    /// rather than silently idling.
+    pub fn set_action(&mut self, action: u8) -> Result<(), ArenaError> {
+        let action = Action::from_byte(action).ok_or(ArenaError::InvalidAction(action))?;
+        self.set_intent(action.direction());
+        Ok(())
+    }
+
+    /// Every action's path from where the player is now.
+    ///
+    /// Velocity-conditioned: the player carries momentum, so a path that
+    /// started from rest would be in the wrong place.
+    ///
+    /// # Errors
+    ///
+    /// As [`predict_path`]. A missing player yields paths from the origin at
+    /// rest, which is what an observation of an empty arena describes.
+    pub fn predict_paths(
+        &mut self,
+        hold_frames: u32,
+    ) -> Result<[[Vec2; SAMPLE_COUNT]; 9], ArenaError> {
+        let (position, velocity) = self
+            .view()
+            .player
+            .map_or((Vec2::ZERO, Vec2::ZERO), |player| {
+                (player.position, player.velocity)
+            });
+        let mut paths = [[Vec2::ZERO; SAMPLE_COUNT]; 9];
+        for (path, action) in paths.iter_mut().zip(Action::ALL) {
+            *path = predict_path(position, velocity, action.direction(), hold_frames)?;
+        }
+        Ok(paths)
     }
 }
 
