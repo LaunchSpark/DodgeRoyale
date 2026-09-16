@@ -25,3 +25,13 @@ target/
 
 # Third-party reference material (not redistributable)
 reference/
+
+# Python trainer: caches, build artifacts, virtual environments, and the
+# checkpoints and logs a training run writes beside its code.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+training/.venv/
+training/runs/
+training/checkpoints/

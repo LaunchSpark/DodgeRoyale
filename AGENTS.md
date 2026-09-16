@@ -66,11 +66,31 @@ belongs. `serde_json` enables `float_roundtrip` because both the handshake layou
 and the fixture manifest carry floats as JSON, and its default parser is not
 correctly rounded.
 
-The Python trainer is planned under `training/dodge_royale/`, with its own package
-metadata, dependency lock, tests, CLI, dashboard, and local training artifacts.
-Golden protocol fixtures live at root `tests/fixtures/gym-v1/` for both languages.
-Build and validate both sides from one repository revision. Python dependencies
-remain optional for playing or building the game.
+The Python trainer lives under `training/dodge_royale/`, with its own package
+metadata, tests, CLI, dashboard, and local training artifacts. Golden protocol
+fixtures live at root `tests/fixtures/gym-v1/` for both languages. Build and
+validate both sides from one repository revision. Python dependencies remain
+optional for playing or building the game.
+
+`protocol.py` owns the wire format and nothing else: it launches the gym, decodes
+messages and returns arrays, and must not import SB3, Gymnasium or PyTorch.
+Training semantics belong in `vec_env.py` above it. Those learner dependencies are
+the `train` extra, so the client stays installable and testable without them, and
+its decoding is exercised against the committed fixtures with no Rust toolchain,
+no build and no child process.
+
+Every array handed to a caller is a copy. Reads may use scratch buffers, but SB3
+stores an observation and reads it back only after the next `step`, so a returned
+view onto a reused buffer would rewrite a rollout underneath the learner and look
+like a training problem rather than a decoding one.
+
+Shutdown never depends on the child cooperating. `close` is idempotent, writes
+CLOSE, then closes stdin only -- closing stdout first would break the server's
+one-byte acknowledgement and turn a clean exit into a failed one -- then waits,
+terminates, and kills, reaping at every stage. The binary is found through
+`DODGE_ROYALE_BIN` or the checkout the module was imported from, never the
+working directory; an override that is set but wrong is an error rather than a
+silent fall back to a different build.
 
 DodgeAI remains independent. Adapt needed policy/training code locally with source
 revision/path attribution and applicable notices; do not modify or import DodgeAI,

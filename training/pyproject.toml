@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dodge-royale-training"
+version = "0.1.0"
+description = "VelocityFlow training stack for DodgeRoyale"
+requires-python = ">=3.11"
+
+# The protocol client is deliberately thin. It speaks to the gym binary and
+# hands back arrays; it knows nothing about SB3, Gymnasium or PyTorch, so it
+# can be tested, and used, without any of them installed.
+dependencies = ["numpy>=1.26"]
+
+[project.optional-dependencies]
+# The learner. Kept out of the base install so a protocol change can be tested
+# without a multi-gigabyte torch download.
+train = [
+    "torch>=2.2",
+    "stable-baselines3>=2.3",
+    "gymnasium>=0.29",
+]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+include = ["dodge_royale*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Integration tests need a built gym binary; unit and fixture tests never do.
+markers = ["live: needs a built dodge-royale binary"]

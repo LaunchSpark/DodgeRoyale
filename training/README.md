@@ -1,11 +1,27 @@
 # DodgeRoyale training
 
-This directory owns the planned Python trainer for DodgeRoyale: the gym protocol
-client, SB3 vector environment, VelocityFlow policy, PPO session, CLI, and dashboard.
-The Python implementation is pending Tasks 8-11 of the
-[implementation plan](../docs/superpowers/plans/2026-09-15-velocity-flow-royale-implementation.md).
-The layout and entry points below are the implementation contract, not runnable
-commands yet.
+This directory owns the Python trainer for DodgeRoyale: the gym protocol client,
+SB3 vector environment, VelocityFlow policy, PPO session, CLI, and dashboard.
+
+**Implemented so far:** `dodge_royale/protocol.py`, the protocol-v1 client, and
+its tests. Everything else is still pending Tasks 9-11 of the
+[implementation plan](../docs/superpowers/plans/2026-09-15-velocity-flow-royale-implementation.md);
+the layout and entry points below are the contract for that work.
+
+## Running the tests
+
+```sh
+cd training
+python -m pytest              # no Rust, no gym process, no PyTorch
+python -m pytest -m live      # also drives a built gym binary
+```
+
+The client depends on NumPy and the standard library, and nothing else. SB3,
+Gymnasium and PyTorch are the `train` extra, so a wire-format change can be
+tested without a multi-gigabyte download. Fixture tests read the committed
+messages in `../tests/fixtures/gym-v1/` and never build or run Rust. Live tests
+skip when no binary is built, but fail rather than skip when `DODGE_ROYALE_BIN`
+is set and broken.
 
 ## Planned layout
 
@@ -14,7 +30,7 @@ training/
   pyproject.toml           # Package, Python version, dependencies, test configuration
   <dependency lock>       # Reproducible environment, selected in Task 8
   dodge_royale/
-    protocol.py           # Protocol-v1 client and Layout
+    protocol.py           # Protocol-v1 client and Layout  [done]
     vec_env.py            # RoyaleVecEnv
     velocity.py           # VelocityFlowRoyaleExtractor
     policies.py           # Local policy classes and checkpoint registration
