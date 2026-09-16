@@ -84,6 +84,21 @@ stores an observation and reads it back only after the next `step`, so a returne
 view onto a reused buffer would rewrite a rollout underneath the learner and look
 like a training problem rather than a decoding one.
 
+`vec_env.py` owns the training semantics the client refuses to. The gym is
+already a batch behind one pipe, so `RoyaleVecEnv` is an adapter and must never
+be wrapped in `SubprocVecEnv` or `DummyVecEnv`, which would launch N gyms of N
+envs. Because the gym auto-resets, one message describes two episodes: batch
+observations are the replacement, `terminal_observation` and every other info
+value are the episode that ended. `TimeLimit.truncated` is truncation without
+termination, so a death on the frame the budget expires is a death and is not
+bootstrapped from. Reward is computed in Python, in `rewards.py`, so tuning it
+is a config edit rather than a rebuild; a surviving frame earns survival, a
+death earns none and pays the penalty, and a reset is not a transition and earns
+nothing. Telemetry counts per step, never cumulatively, and one action per 60 Hz
+frame means sixty frames is one second. `get_attr` answers `render_mode` and
+raises `AttributeError` for anything else, because `VecEnv.__init__` probes it
+and catches only that.
+
 Shutdown never depends on the child cooperating. `close` is idempotent, writes
 CLOSE, then closes stdin only -- closing stdout first would break the server's
 one-byte acknowledgement and turn a clean exit into a failed one -- then waits,

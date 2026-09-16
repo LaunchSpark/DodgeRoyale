@@ -1,0 +1,5 @@
+{
+  "survival_per_frame": 0.02,
+  "death_penalty": 2.0,
+  "uncontrolled_score_weight": 0.05
+}
