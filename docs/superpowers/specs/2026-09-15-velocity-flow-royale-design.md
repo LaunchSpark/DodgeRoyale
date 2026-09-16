@@ -221,6 +221,33 @@ transfer, inference and optimisation separately, at 8 and 64 envs.
 If transfer dominates, the fallback is packing channels 0-2 and 4 as
 bitfields: 115,128 -> 51,640 bytes, about 2.23x. Only if measured.
 
+**Measured**, 2026-09-16, `cargo bench --no-default-features --bench
+gym_throughput` on 8 workers. Inference and optimisation are DodgeAI's and are
+not covered here.
+
+| Stage | Per env step | 8 envs / step | 64 envs / step |
+|---|---|---|---|
+| Simulate | 487 us | | |
+| Encode | 61 us | | |
+| Batch step (simulate + encode, on 8 workers) | 166-201 us | 1.61 ms | 10.60 ms |
+| Transfer (write, pipe, parse) | 262-289 us | 2.31 ms | 16.79 ms |
+| The same bytes, one `write_all` | 19-20 us | 0.16 ms | 1.21 ms |
+
+Transfer does dominate: 1.4x the batch step at 8 envs, 1.6x at 64. **But
+packing is the wrong fix.** The pipe moves these bytes at about 5,500 MiB/s
+and the protocol gets 380-420 MiB/s, so roughly nine tenths of transfer is the
+codec, not the kernel: `write_floats` and `read_floats` move four bytes per
+call, which is 1.8M calls for a 64-env batch. Copying whole slices saves up to
+15.6 ms per step at 64 envs against packing's 9.3 ms, and it does not change a
+byte on the wire, so `PROTOCOL_VERSION` stays at 1. Do that first and measure
+again; packing is worth revisiting only if transfer still dominates after it.
+
+Two things the table is not. The batch step is 2.5x the single-threaded work
+divided by the workers, so there is coordination overhead to look at
+separately. And `simulate` at 487 us a frame is the largest single cost in the
+system; nothing here says whether that is the 4,950 pairwise collision checks
+or Bevy's per-`update` overhead.
+
 ### 4.5 Tests
 
 * Encoder: priority overlaps, same-type tie-breaks, a seam-straddling hazard,

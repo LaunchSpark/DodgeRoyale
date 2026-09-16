@@ -37,6 +37,12 @@ fastrand = { version = "2.5", features = ["js"] }
 [package.metadata.bevy_cli.web]
 wasm-opt = false
 
+# Not the default libtest harness: `#[bench]` is nightly only, and the gym
+# benchmark reports stages rather than one number per function.
+[[bench]]
+name = "gym_throughput"
+harness = false
+
 [lints.rust]
 unsafe_code = "forbid"
 

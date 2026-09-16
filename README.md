@@ -233,6 +233,18 @@ serialization/compute boundaries. CI checks native graphics, headless, and WASM
 configurations and runs the PostgreSQL integration test. Browser rendering still
 needs an actual browser check after renderer or shell changes.
 
+The gym serves headless arenas to a trainer over stdin and stdout
+(`./run.sh gym --envs 8`). Its throughput is measured rather than assumed:
+
+```sh
+./run.sh bench          # 8 and 64 envs, the sizes the design names
+./run.sh bench 4        # any other env count
+```
+
+The benchmark times simulation, encoding and pipe transfer separately, per env
+step, and prices the design’s packing fallback against them. It must run
+optimised; a debug build makes the simulation look like the bottleneck.
+
 With the exported environment and Compose DB from above, run the persistence check:
 
 ```sh

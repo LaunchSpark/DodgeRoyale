@@ -95,6 +95,13 @@ gym)
     # build" appended to the byte stream.
     restore_graphics >&2
     ;;
+bench)
+    # The bench profile builds into target/release, so this never replaces the
+    # playable target/debug binary and needs no restore. Optimised on purpose:
+    # debug numbers would say the simulation is the bottleneck when it is not.
+    # Arguments after the task name are env counts, e.g. ./run.sh bench 4.
+    cargo bench --locked --no-default-features --bench gym_throughput -- "${@:2}"
+    ;;
 web)
     bevy run --locked web --open
     ;;
@@ -110,6 +117,7 @@ usage: ./run.sh [command]
   smoke         one headless frame, then restore the graphics build
   headless      one idle-player episode, then report how it ended
   gym           serve headless arenas to a trainer over stdin/stdout
+  bench         time simulation, encoding and pipe transfer per env step
   fmt           format the workspace
   web           browser build, needs the Bevy CLI
 USAGE
