@@ -179,7 +179,54 @@ fn emit_session(root: &Path, layout: &Layout) -> Result<Vec<Fixture>, Box<dyn co
         ..step_fixture(root, "step-auto-reset.bin", &bytes, &ended, layout)?
     };
 
-    Ok(vec![reset, ordinary, auto_reset])
+    Ok(vec![reset, ordinary, auto_reset, emit_death(root, layout)?])
+}
+
+/// The other way an episode ends: the player is hit rather than timed out.
+///
+/// `step-auto-reset.bin` has both envs truncating together, which leaves two
+/// things untested. A death sets `terminated` without `truncated`, and a
+/// learner treats those oppositely -- it bootstraps from a truncated
+/// observation and must not from a terminated one. And because the two envs
+/// almost never die on the same frame, this is also the mixed batch: one env
+/// carries a terminal observation and a replacement seed while the other
+/// simply carries on.
+fn emit_death(root: &Path, layout: &Layout) -> Result<Fixture, Box<dyn core::error::Error>> {
+    // A full arena and an idle player, so a hit arrives on its own. The budget
+    // is far away, so nothing here can be a timeout.
+    let hunted = BatchConfig {
+        envs: 2,
+        workers: 1,
+        root_seed: 31,
+        enemy_count: 100,
+        max_frames: 100_000,
+        hold_frames: SESSION.hold_frames,
+    };
+    let (mut batch, _frame_zero) = ArenaBatch::start(hunted)?;
+
+    let mut killed = None;
+    for _ in 0..hunted.max_frames {
+        let stepped = batch.step(&[0, 0])?;
+        if stepped
+            .transitions
+            .iter()
+            .any(|transition| transition.terminated)
+        {
+            killed = Some(stepped);
+            break;
+        }
+    }
+    let killed = killed.ok_or("an idle player is caught eventually")?;
+
+    let mut bytes = Vec::new();
+    write_step(&mut bytes, &killed)?;
+    Ok(Fixture {
+        purpose: "A death: `terminated` without `truncated`, which a learner must not \
+                  bootstrap from. The envs do not die together, so this is also the \
+                  mixed batch -- one env has a terminal observation and a replacement \
+                  seed, the other is still running.",
+        ..step_fixture(root, "step-death.bin", &bytes, &killed, layout)?
+    })
 }
 
 // --- hand-placed scenes -------------------------------------------------
