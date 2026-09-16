@@ -280,13 +280,15 @@ fn write_grid(view: &ArenaView, player: &PlayerView, buffer: &mut [f32]) {
             hazards.push(painted);
         }
     }
-    // Lowest priority first, so a later write wins the cell. Ordering by rank,
-    // then area, then identity makes the winner independent of query order.
+    // Lowest priority first, so a later write wins the cell. Rank and area
+    // ascend, because the more dangerous and the larger hazard should win.
+    // Identity descends for the same reason: the winner is the LOWEST entity
+    // bits, so it has to be written last.
     hazards.sort_unstable_by(|left, right| {
         left.rank
             .cmp(&right.rank)
             .then(left.area.total_cmp(&right.area))
-            .then(left.identity.cmp(&right.identity))
+            .then(right.identity.cmp(&left.identity))
     });
 
     for hazard in &hazards {

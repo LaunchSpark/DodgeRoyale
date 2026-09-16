@@ -92,7 +92,11 @@ pub fn run() -> Result<AppExit> {
     // Report the seed on every run, so an interesting one can be replayed.
     let seed = args.seed.map_or_else(GameSeed::from_entropy, GameSeed::new);
 
-    if args.headless && !args.smoke_test {
+    // A build without a renderer has no window to open, so an ordinary launch
+    // is a headless one whether or not the flag was passed: ./run.sh headless
+    // does not pass it.
+    let renderless = args.headless || !cfg!(feature = "graphics");
+    if renderless && !args.smoke_test {
         let exit = run_idle_episode(seed);
         runtime.shutdown_timeout(Duration::from_secs(3));
         return exit;

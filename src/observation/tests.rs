@@ -620,3 +620,78 @@ fn encoding_is_deterministic_for_one_view() {
     );
     assert_eq!(encoded(&view), encoded(&view));
 }
+
+/// Which of two entities the tie-break prefers.
+///
+/// `Entity::to_bits` stores the index inverted, so a lower index is a *higher*
+/// bits value. Deriving the expectation from the bits keeps these tests honest
+/// about the rule rather than about Bevy's packing.
+fn lower_bits(left: Entity, right: Entity) -> Entity {
+    if left.to_bits() <= right.to_bits() {
+        left
+    } else {
+        right
+    }
+}
+
+#[test]
+fn hazards_of_equal_size_give_the_cell_to_the_lower_entity() {
+    let at_centre = Vec2::new(40.0 * PX, 0.0);
+    // Same kind, same footprint: only identity can separate them, and the
+    // velocity each carries says which one won.
+    let left = enemy_at(
+        3,
+        EnemyKind::Normal,
+        at_centre,
+        4.0 * PX,
+        Vec2::new(-120.0, 0.0),
+    );
+    let right = enemy_at(
+        9,
+        EnemyKind::Normal,
+        at_centre,
+        4.0 * PX,
+        Vec2::new(120.0, 0.0),
+    );
+    let winner = lower_bits(left.entity, right.entity);
+    let expected_sign = if winner == left.entity { -1.0 } else { 1.0 };
+
+    for order in [vec![left, right], vec![right, left]] {
+        let buffer = encoded(&view_of(
+            player_at(Vec2::ZERO, Vec2::ZERO),
+            order,
+            Vec::new(),
+        ));
+        let (column, row) = *occupied(&buffer, 0).first().expect("painted cells");
+        let velocity = cell(&buffer, 5, column, row);
+        assert!(
+            velocity * expected_sign > 0.0,
+            "the lowest entity bits win the cell, whichever order they arrive in: {velocity}"
+        );
+    }
+}
+
+#[test]
+fn blasts_of_equal_size_and_different_phase_resolve_by_entity() {
+    let at_centre = Vec2::new(40.0 * PX, 0.0);
+    let growing = blast_at(2, at_centre, 4.0 * PX, 0.1, 1.0);
+    let shrinking = blast_at(7, at_centre, 4.0 * PX, 0.9, 1.0);
+    let winner = lower_bits(growing.entity, shrinking.entity);
+    // Phase is positive while growing and negative while shrinking, so the
+    // winner's sign says which blast the cell describes.
+    let expected_sign = if winner == growing.entity { 1.0 } else { -1.0 };
+
+    for order in [vec![growing, shrinking], vec![shrinking, growing]] {
+        let buffer = encoded(&view_of(
+            player_at(Vec2::ZERO, Vec2::ZERO),
+            Vec::new(),
+            order,
+        ));
+        let (column, row) = *occupied(&buffer, 2).first().expect("painted cells");
+        let phase = cell(&buffer, 3, column, row);
+        assert!(
+            phase * expected_sign > 0.0,
+            "one blast owns the cell, and it is the same one either way: {phase}"
+        );
+    }
+}

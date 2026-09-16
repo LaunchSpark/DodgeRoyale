@@ -90,7 +90,10 @@ gym)
     # after the task name are passed through, e.g. ./run.sh gym --envs 4.
     restore_on_exit
     cargo run --locked --no-default-features -- gym "${@:2}"
-    restore_graphics
+    # Stdout belongs to the protocol, so this task's own chatter goes to stderr:
+    # a client reading the pipe would otherwise find "--> restoring graphics
+    # build" appended to the byte stream.
+    restore_graphics >&2
     ;;
 web)
     bevy run --locked web --open
