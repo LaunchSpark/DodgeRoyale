@@ -108,9 +108,10 @@ Paths come from the observation rather than a fixed rest-start table, because
 Royale's player carries momentum that a rest-start path misplaces by about two
 and a half cells. Because the window is player-centred and `path_scale` is its
 half width, a stored path already *is* its own `grid_sample` coordinate;
-`sample_points` is the identity and is tested as such, since a double offset or
-a flipped Y would otherwise keep every tensor the right shape while sampling
-cells the player never reaches. Each horizon is read from its own field slice --
+`sample_points` computes that conversion from the layout rather than assuming
+it, and for the shipped layout it comes out as a multiply by one and an add of
+zero. Assuming it would make the function a comment, correct only by accident
+and silently wrong for a window that stopped being centred. Each horizon is read from its own field slice --
 the diagonal -- which is what lets "lethal now, clear in two seconds" be
 expressed at all. The layout travels into the checkpoint through
 `features_extractor_kwargs`, and `require_loadable` refuses both a foreign

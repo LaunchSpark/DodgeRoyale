@@ -121,24 +121,39 @@ def decode_observation(
     return player, grids, paths
 
 
-def sample_points(paths: torch.Tensor) -> torch.Tensor:
+def sample_points(paths: torch.Tensor, layout: Layout) -> torch.Tensor:
     """Turn stored paths into `grid_sample` coordinates.
 
-    The stored path is a displacement from the player in window pixels divided
-    by the window's half width. The player sits at the window's centre, so a
-    path's pixel point is ``128 + path * 128``, and `grid_sample` wants that
-    normalised to [-1, 1] across a 256px window with ``align_corners=False``:
+    A stored path is a displacement from the player, in window pixels divided
+    by `path_scale`. The player sits at the window's centre, so the pixel point
+    is ``centre + path * path_scale``, and `grid_sample` wants that normalised
+    to [-1, 1] across the window with ``align_corners=False``.
 
-        2 * (128 + path * 128) / 256 - 1 == path
+    Written as a scale and an offset rather than literally, because the literal
+    form loses precision where it matters most. ``2 * (128 + p * 128) / 256 - 1``
+    computes ``1 + p`` and then subtracts one, so a small ``p`` -- a short path,
+    which is the common case -- is rounded into the gap beside 1.0 and comes
+    back with its low bits gone. Folding the constants first keeps every path
+    exact:
 
-    The two are therefore the same number, and this function is the identity.
-    It exists anyway, and is tested, because that equality is a property of
-    this layout and not a law: a window that stopped being player-centred, or
-    a path scale that stopped being the half width, would break it silently.
-    Writing it out is what makes a double offset or a flipped Y a test failure
-    rather than a policy that samples the wrong cells forever.
+        scale  = 2 * path_scale / window_pixels
+        offset = 2 * centre / window_pixels - 1
+
+    For the shipped layout the centre is half the window and `path_scale` is
+    its half width, so this is a multiply by one and an add of zero -- the
+    stored path already *is* its coordinate. That is a property of this layout
+    and not a law, which is why the conversion is computed from the layout
+    rather than assumed: a window that stopped being player-centred would
+    otherwise sample cells the player never reaches, while every tensor stayed
+    the right shape.
     """
-    return paths
+    scale = 2.0 * layout.path_scale / layout.window_pixels
+    offset = 2.0 * (layout.window_pixels / 2.0) / layout.window_pixels - 1.0
+    if scale == 1.0 and offset == 0.0:
+        # Exactly the identity for this layout; skip the arithmetic so no
+        # rounding is introduced where none is needed.
+        return paths
+    return paths * scale + offset
 
 
 def sense_features(
@@ -339,7 +354,7 @@ class VelocityFlowRoyaleExtractor(BaseFeaturesExtractor):
     def _danger_from_field(self, field: torch.Tensor, paths: torch.Tensor) -> torch.Tensor:
         sampled = F.grid_sample(
             field,
-            sample_points(paths),
+            sample_points(paths, self.layout),
             mode="bilinear",
             # The paths are deliberately unclipped and may leave the window.
             # Border padding reads the edge rather than zero, so a path that

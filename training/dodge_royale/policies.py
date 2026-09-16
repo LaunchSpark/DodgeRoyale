@@ -8,6 +8,7 @@ it to load.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -20,6 +21,8 @@ from .velocity import INITIAL_TEMPERATURE, VALUE_FEATURES, VelocityFlowRoyaleExt
 
 __all__ = [
     "ARCHITECTURES",
+    "ROYALE",
+    "Architecture",
     "ROYALE_ARCHITECTURE",
     "VelocityFlowRoyalePolicy",
     "checkpoint_architecture",
@@ -93,19 +96,62 @@ def policy_kwargs_for(layout: Layout) -> dict[str, Any]:
     }
 
 
-#: Everything needed to build a run of each known architecture.
-ARCHITECTURES: dict[str, dict[str, Any]] = {
-    ROYALE_ARCHITECTURE: {
-        "policy_class": VelocityFlowRoyalePolicy,
-        "policy_kwargs": policy_kwargs_for,
-        # v2's values, converted from four-frame to one-frame decisions so the
-        # time scales are preserved: 0.99 ** (1/4) and 0.95 ** (1/4). They keep
-        # the horizons the same length in seconds; they do not make one-frame
-        # PPO equivalent to four-frame PPO. Starting values, to tune.
-        "gamma": 0.99 ** (1 / 4),
-        "gae_lambda": 0.95 ** (1 / 4),
-    }
-}
+@dataclass(frozen=True)
+class Architecture:
+    """Everything a run of one architecture needs, in one shape.
+
+    A dataclass rather than a dict because the entries are not alike: the
+    policy kwargs depend on the layout and the discounts do not. As a dict,
+    one key would have been a callable sitting among plain values, and a
+    caller that read them uniformly would have passed a function to PPO as
+    `policy_kwargs`. Here the difference is a method, and the type says so.
+    """
+
+    name: str
+    policy_class: type
+    #: v2's values, converted from four-frame to one-frame decisions so the
+    #: time scales are preserved: 0.99 ** (1/4) and 0.95 ** (1/4). They keep
+    #: the horizons the same length in seconds; they do not make one-frame PPO
+    #: equivalent to four-frame PPO. Starting values, to tune.
+    gamma: float
+    gae_lambda: float
+
+    def policy_kwargs(self, layout: Layout) -> dict[str, Any]:
+        return policy_kwargs_for(layout)
+
+    def ppo_kwargs(self, layout: Layout) -> dict[str, Any]:
+        """What to hand `PPO(...)` for a fresh model.
+
+        The discounts are included here rather than left to the caller so that
+        they cannot be forgotten, or hardcoded beside a table that already
+        holds them.
+        """
+        return {
+            "policy": self.policy_class,
+            "policy_kwargs": self.policy_kwargs(layout),
+            "gamma": self.gamma,
+            "gae_lambda": self.gae_lambda,
+        }
+
+    def resume_kwargs(self) -> dict[str, Any]:
+        """What to hand `PPO.load(...)` so a checkpoint takes these discounts.
+
+        `load` otherwise restores whatever the checkpoint was saved with, so a
+        run resumed after the table changed would silently keep the old
+        values. `custom_objects` is how SB3 overrides a saved field.
+        """
+        return {"custom_objects": {"gamma": self.gamma, "gae_lambda": self.gae_lambda}}
+
+
+ROYALE = Architecture(
+    name=ROYALE_ARCHITECTURE,
+    policy_class=VelocityFlowRoyalePolicy,
+    gamma=0.99 ** (1 / 4),
+    gae_lambda=0.95 ** (1 / 4),
+)
+
+#: Every architecture this trainer can build, by name.
+ARCHITECTURES: dict[str, Architecture] = {ROYALE_ARCHITECTURE: ROYALE}
 
 
 def _saved_data(path) -> dict[str, Any]:

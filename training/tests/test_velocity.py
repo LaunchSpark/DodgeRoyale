@@ -112,7 +112,7 @@ def test_stored_paths_are_already_grid_sample_coordinates(layout):
     normalised = 2.0 * points / layout.window_pixels - 1.0
 
     assert torch.allclose(normalised, paths, atol=0.0), "the identity is exact"
-    assert torch.equal(sample_points(paths), normalised)
+    assert torch.equal(sample_points(paths, layout), normalised)
 
 
 def test_the_window_centre_is_the_corner_between_the_middle_cells(layout):
@@ -466,10 +466,61 @@ def test_the_policy_produces_finite_actions_and_values(layout):
 
 def test_the_architecture_table_names_royale_and_carries_its_hyperparameters():
     entry = ARCHITECTURES[ROYALE_ARCHITECTURE]
-    assert entry["policy_class"] is VelocityFlowRoyalePolicy
+    assert entry.policy_class is VelocityFlowRoyalePolicy
     # Converted from four-frame to one-frame decisions, preserving time scales.
-    assert entry["gamma"] == pytest.approx(0.99 ** (1 / 4))
-    assert entry["gae_lambda"] == pytest.approx(0.95 ** (1 / 4))
+    assert entry.gamma == pytest.approx(0.99 ** (1 / 4))
+    assert entry.gae_lambda == pytest.approx(0.95 ** (1 / 4))
+
+
+def test_every_table_entry_is_data_not_a_callable():
+    """A dict with one callable among plain values is a trap for a caller
+    that reads them uniformly, which is exactly what the training CLI will
+    do."""
+    for entry in ARCHITECTURES.values():
+        assert isinstance(entry.gamma, float)
+        assert isinstance(entry.gae_lambda, float)
+        assert not callable(entry.gamma) and not callable(entry.gae_lambda)
+
+
+def test_both_the_fresh_and_resumed_paths_take_the_discounts_from_the_table(layout):
+    """Neither path may hardcode a discount beside a table that holds one."""
+    entry = ARCHITECTURES[ROYALE_ARCHITECTURE]
+
+    fresh = entry.ppo_kwargs(layout)
+    assert fresh["gamma"] == entry.gamma
+    assert fresh["gae_lambda"] == entry.gae_lambda
+    assert fresh["policy"] is VelocityFlowRoyalePolicy
+    assert isinstance(fresh["policy_kwargs"], dict), "kwargs, not the function that builds them"
+
+    resumed = entry.resume_kwargs()["custom_objects"]
+    assert resumed["gamma"] == entry.gamma
+    assert resumed["gae_lambda"] == entry.gae_lambda
+    # The value PPO defaults to, and the one the plan warns against leaving in.
+    assert entry.gae_lambda != 0.95
+
+
+def test_a_resumed_checkpoint_actually_takes_the_tables_discounts(tmp_path, layout):
+    """SB3 restores what was saved unless told otherwise, so this checks the
+    override reaches the loaded model rather than only the kwargs dict."""
+    from stable_baselines3 import PPO
+
+    entry = ARCHITECTURES[ROYALE_ARCHITECTURE]
+    stale = PPO(
+        **entry.ppo_kwargs(layout),
+        env=_DummyEnv(layout),
+        n_steps=8,
+        batch_size=8,
+        device="cpu",
+    )
+    stale.gae_lambda = 0.95  # as if saved before the table was corrected
+    stale.gamma = 0.99
+    path = tmp_path / "stale.zip"
+    stale.save(path)
+
+    assert PPO.load(path, device="cpu").gae_lambda == pytest.approx(0.95)
+    resumed = PPO.load(path, device="cpu", **entry.resume_kwargs())
+    assert resumed.gae_lambda == pytest.approx(entry.gae_lambda)
+    assert resumed.gamma == pytest.approx(entry.gamma)
 
 
 def test_a_saved_checkpoint_reloads_with_the_same_outputs(tmp_path, layout, manifest):
@@ -495,17 +546,29 @@ def test_a_saved_checkpoint_reloads_with_the_same_outputs(tmp_path, layout, mani
         device="cpu",
     )
     model.policy.set_training_mode(False)
+    # Move the temperature off its initial value, so a reload that silently
+    # rebuilt _FieldLogits from scratch would not coincidentally match.
     with torch.no_grad():
-        before = model.policy(observation)[1]
+        model.policy.action_net.log_temperature.fill_(0.37)
+    with torch.no_grad():
+        before_values = model.policy.predict_values(observation)
+        before_logits = model.policy.get_distribution(observation).distribution.logits
 
     path = tmp_path / "royale.zip"
     model.save(path)
     reloaded = PPO.load(path, device="cpu")
     reloaded.policy.set_training_mode(False)
     with torch.no_grad():
-        after = reloaded.policy(observation)[1]
+        after_values = reloaded.policy.predict_values(observation)
+        after_logits = reloaded.policy.get_distribution(observation).distribution.logits
 
-    assert torch.allclose(before, after, atol=1e-6)
+    # The critic and the actor. Logits rather than sampled actions: sampling is
+    # stochastic and log_prob depends on which action was drawn, so neither
+    # would match across a reload without seeding, and comparing them would be
+    # testing the seed rather than the restore.
+    assert torch.allclose(before_values, after_values, atol=1e-6)
+    assert torch.allclose(before_logits, after_logits, atol=1e-6)
+    assert reloaded.policy.action_net.log_temperature.item() == pytest.approx(0.37)
     assert checkpoint_layout(path) == layout
 
 
@@ -593,3 +656,101 @@ class _DummyEnv(VecEnv):
 
     def close(self):
         pass
+
+
+# --- the trunk itself ----------------------------------------------------
+
+
+def test_the_body_actually_runs_at_half_resolution(extractor, layout):
+    """The one structural claim the controller tests cannot make.
+
+    Those monkeypatch the field away, so an implementation that dropped the
+    pool and the interpolate entirely would pass every one of them and still
+    produce a (batch, 32, 64, 64) trunk. Hooks are the only way to see where
+    the work happened: full resolution into the stem, half out of it into the
+    body, full again after the interpolate.
+    """
+    seen: dict[str, tuple[int, ...]] = {}
+    trunk = extractor.field_net
+
+    # These must return None. A forward hook that returns anything replaces
+    # the module's output with it, so a lambda whose body is a tuple of two
+    # assignments quietly hands the next layer a tuple.
+    def watch_stem(_module, _inputs, output) -> None:
+        seen["stem_out"] = tuple(output.shape)
+
+    def watch_body(_module, inputs, output) -> None:
+        seen["body_in"] = tuple(inputs[0].shape)
+        seen["body_out"] = tuple(output.shape)
+
+    handles = [
+        trunk.stem.register_forward_hook(watch_stem),
+        trunk.body.register_forward_hook(watch_body),
+    ]
+    try:
+        _, grids, _ = decode_observation(blank(layout, batch=2), layout)
+        output = trunk(grids)
+    finally:
+        for handle in handles:
+            handle.remove()
+
+    full, half = layout.grid, layout.grid // 2
+    assert seen["stem_out"][-2:] == (full, full), "the stem sees every 4px cell"
+    assert seen["body_in"][-2:] == (half, half), "the heavy convolutions run at half"
+    assert seen["body_out"][-2:] == (half, half)
+    assert tuple(output.shape) == (2, 32, full, full), "and it is interpolated back"
+
+
+def test_the_trunk_is_upsampled_bilinearly_not_by_repetition(extractor, layout):
+    """Nearest would hold each body cell flat across a 2x2 block.
+
+    That matters because the controller samples across those edges: a step at
+    a block boundary is an artefact of the upsample, not a fact about danger.
+    """
+    torch.manual_seed(3)
+    grids = torch.randn(1, len(layout.channels), layout.grid, layout.grid)
+    output = extractor.field_net(grids)[0, 0]
+
+    # Compare each cell with its 2x2 block partner. Under nearest they are
+    # identical everywhere; under bilinear they differ almost everywhere.
+    blocks = output.reshape(layout.grid // 2, 2, layout.grid // 2, 2)
+    spread = (blocks.amax(dim=(1, 3)) - blocks.amin(dim=(1, 3))).detach()
+    assert float(spread.mean()) > 1e-6, "a nearest upsample would make every block flat"
+
+
+def test_the_stem_sees_a_single_cell_that_the_body_would_blur_away(extractor, layout):
+    """The reason the stem stays at full resolution.
+
+    An ordinary Royale enemy is four to seven pixels -- one or two cells -- so
+    a stem at half resolution would average a hitbox with its empty neighbour
+    before anything looked at it.
+    """
+    grids = torch.zeros(1, len(layout.channels), layout.grid, layout.grid)
+    grids[0, layout.channels.index("normal-enemy"), 20, 21] = 1.0
+    stem = extractor.field_net.stem(grids)
+    # The lone cell has to move the stem somewhere, at full resolution.
+    assert stem.shape[-2:] == (layout.grid, layout.grid)
+    empty = extractor.field_net.stem(torch.zeros_like(grids))
+    assert not torch.allclose(stem, empty), "one occupied cell must reach the stem"
+
+
+def test_sample_points_converts_rather_than_assuming_the_identity(layout):
+    """It must be right for a layout it was not written against.
+
+    The identity holds only because the window is player-centred and
+    `path_scale` is its half width. A layout where that stops being true has
+    to come out converted, not unchanged -- otherwise the function is a
+    comment and the test beside it is the only thing standing between a
+    changed layout and a controller sampling the wrong cells.
+    """
+    raw = layout.as_dict()
+    raw["path_scale"] = layout.window_pixels / 4.0  # half the half width
+    halved = Layout.from_json(raw)
+
+    paths = torch.tensor([[[[0.5, -0.25], [1.0, 0.0]]]])
+    converted = sample_points(paths, halved)
+
+    assert torch.allclose(converted, paths * 0.5), "the scale must follow the layout"
+    assert not torch.equal(converted, paths), "and it is no longer the identity"
+    # The shipped layout is still exactly the identity, with no arithmetic.
+    assert torch.equal(sample_points(paths, layout), paths)
