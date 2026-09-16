@@ -126,7 +126,12 @@ type Actors<'w, 's, F> = Query<'w, 's, (&'static Transform, &'static Collider), 
     clippy::needless_pass_by_value,
     reason = "Bevy injects system parameters by value"
 )]
-fn replenish_enemies(
+/// Top the arena up to its target population, one budgeted pass per call.
+///
+/// Public so a headless arena can run it on its own initialisation schedule
+/// and fill the world before frame zero, rather than duplicating the placement
+/// algorithm. Ordinary play reaches it through [`EnemyPopulationPlugin`].
+pub fn replenish_enemies(
     mut commands: Commands,
     population: Res<EnemyPopulation>,
     arena: Res<EnemyWorld>,

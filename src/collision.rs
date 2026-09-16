@@ -6,7 +6,7 @@ use bevy::prelude::*;
 ///
 /// Keep colliding actors unparented. This detects overlap; it does not resolve
 /// penetration or simulate rigid bodies. Touching edges count as contact.
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct Collider {
     /// Positive half width and half height, independent of sprite size.
     pub half_extents: Vec2,
