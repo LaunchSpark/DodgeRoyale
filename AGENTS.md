@@ -99,6 +99,25 @@ frame means sixty frames is one second. `get_attr` answers `render_mode` and
 raises `AttributeError` for anything else, because `VecEnv.__init__` probes it
 and catches only that.
 
+`velocity.py` and `policies.py` are adapted from DodgeAI revision e32f222, with
+the source recorded in each module. Nothing imports DodgeAI, and a Royale
+checkpoint never needs it to load. The architecture is ported; no weights are.
+The network's only output is a danger field -- the controller that reads it is
+arithmetic and is not learned, so all the learning pressure lands on the field.
+Paths come from the observation rather than a fixed rest-start table, because
+Royale's player carries momentum that a rest-start path misplaces by about two
+and a half cells. Because the window is player-centred and `path_scale` is its
+half width, a stored path already *is* its own `grid_sample` coordinate;
+`sample_points` is the identity and is tested as such, since a double offset or
+a flipped Y would otherwise keep every tensor the right shape while sampling
+cells the player never reaches. Each horizon is read from its own field slice --
+the diagonal -- which is what lets "lethal now, clear in two seconds" be
+expressed at all. The layout travels into the checkpoint through
+`features_extractor_kwargs`, and `require_loadable` refuses both a foreign
+checkpoint and a Royale one trained against a different layout before a model is
+built: equal lengths with reordered channels would load, run, and point every
+trained filter somewhere else.
+
 Shutdown never depends on the child cooperating. `close` is idempotent, writes
 CLOSE, then closes stdin only -- closing stdout first would break the server's
 one-byte acknowledgement and turn a clean exit into a failed one -- then waits,

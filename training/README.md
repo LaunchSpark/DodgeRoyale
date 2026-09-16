@@ -4,8 +4,9 @@ This directory owns the Python trainer for DodgeRoyale: the gym protocol client,
 SB3 vector environment, VelocityFlow policy, PPO session, CLI, and dashboard.
 
 **Implemented so far:** `protocol.py` (the protocol-v1 client), `vec_env.py`
-(`RoyaleVecEnv`), `rewards.py` and `telemetry.py`, with their tests. The policy,
-PPO session, CLI and dashboard are still pending Tasks 10-11 of the
+(`RoyaleVecEnv`), `rewards.py`, `telemetry.py`, `velocity.py` (the extractor)
+and `policies.py`, with their tests. The PPO session, CLI and dashboard are
+still pending Task 11 of the
 [implementation plan](../docs/superpowers/plans/2026-09-15-velocity-flow-royale-implementation.md);
 the layout and entry points below are the contract for that work.
 
@@ -33,8 +34,8 @@ training/
   dodge_royale/
     protocol.py           # Protocol-v1 client and Layout  [done]
     vec_env.py            # RoyaleVecEnv  [done]
-    velocity.py           # VelocityFlowRoyaleExtractor
-    policies.py           # Local policy classes and checkpoint registration
+    velocity.py           # VelocityFlowRoyaleExtractor  [done]
+    policies.py           # Local policy classes and checkpoint registration  [done]
     rewards.py            # Royale reward configuration  [done]
     telemetry.py          # Training events and duration reporting  [done]
     training.py           # PPO session and process lifecycle
