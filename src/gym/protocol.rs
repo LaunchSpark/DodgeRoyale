@@ -442,6 +442,30 @@ pub fn read_handshake<R: Read>(reader: &mut R) -> Result<Handshake, ProtocolErro
     serde_json::from_slice(&json).map_err(|error| ProtocolError::Malformed(error.to_string()))
 }
 
+/// Read one request, or `None` if the stream ended cleanly between messages.
+///
+/// A client that simply goes away is a normal shutdown; a client that stops
+/// halfway through a message is not, and that difference is only visible here,
+/// at the message boundary.
+///
+/// # Errors
+///
+/// As [`read_request`].
+pub fn read_request_or_eof<R: Read>(
+    reader: &mut R,
+    envs: usize,
+    maximum: u64,
+) -> Result<Option<Request>, ProtocolError> {
+    let mut opcode = [0_u8; 1];
+    match reader.read(&mut opcode) {
+        Ok(0) => return Ok(None),
+        Ok(_) => {}
+        Err(error) => return Err(ProtocolError::from(error)),
+    }
+    let opcode = opcode.first().copied().ok_or(ProtocolError::Truncated)?;
+    read_request_body(reader, opcode, envs, maximum).map(Some)
+}
+
 /// Read one request, validating it completely before it can act on anything.
 ///
 /// # Errors
@@ -454,6 +478,15 @@ pub fn read_request<R: Read>(
     maximum: u64,
 ) -> Result<Request, ProtocolError> {
     let opcode = read_u8(reader)?;
+    read_request_body(reader, opcode, envs, maximum)
+}
+
+fn read_request_body<R: Read>(
+    reader: &mut R,
+    opcode: u8,
+    envs: usize,
+    maximum: u64,
+) -> Result<Request, ProtocolError> {
     match opcode {
         request::STEP => {
             let actions = read_bytes(reader, maximum)?;

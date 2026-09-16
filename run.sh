@@ -85,6 +85,13 @@ headless)
 fmt)
     cargo fmt --all
     ;;
+gym)
+    # Serves the trainer on stdout, so diagnostics stay on stderr. Arguments
+    # after the task name are passed through, e.g. ./run.sh gym --envs 4.
+    restore_on_exit
+    cargo run --locked --no-default-features -- gym "${@:2}"
+    restore_graphics
+    ;;
 web)
     bevy run --locked web --open
     ;;
@@ -98,7 +105,8 @@ usage: ./run.sh [command]
   test          headless tests, then restore the graphics build
   check         full gate: fmt, both clippy configs, tests, smoke
   smoke         one headless frame, then restore the graphics build
-  headless      headless loop (Ctrl-C to exit)
+  headless      one idle-player episode, then report how it ended
+  gym           serve headless arenas to a trainer over stdin/stdout
   fmt           format the workspace
   web           browser build, needs the Bevy CLI
 USAGE

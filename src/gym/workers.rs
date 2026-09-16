@@ -322,8 +322,7 @@ impl ArenaBatch {
                 Ok(Ok(shard)) => outcomes.extend(shard),
                 Ok(Err(error)) => failure = failure.or(Some(error)),
                 Err(error) => {
-                    failure =
-                        failure.or_else(|| Some(BatchError::WorkerLost(error.to_string())));
+                    failure = failure.or_else(|| Some(BatchError::WorkerLost(error.to_string())));
                 }
             }
         }

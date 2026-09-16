@@ -40,6 +40,11 @@ section, and the total value count.
 A client that cannot match the layout it was trained against must fail here,
 before it builds a policy.
 
+The server then writes one `0x83` RESET response carrying frame zero: every
+arena is already built and filled by the time the handshake is sent, so a
+client can start stepping without asking for a reset it did not want. A later
+explicit RESET still restarts the arenas.
+
 ## Requests
 
 | Opcode | Name | Payload |
