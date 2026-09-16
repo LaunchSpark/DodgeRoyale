@@ -13,6 +13,16 @@ first, then finds a random position outside that type's player detection range.
 Enemies that collide with each other both die and are replaced. Enemy or blast
 contact defeats the player and returns to the menu.
 
+## AI training
+
+The VelocityFlow trainer is planned as part of this repository under
+[`training/`](training/README.md), alongside the Rust simulation, observation
+encoder, and gym protocol. It will contain the Python client, policy, PPO CLI,
+and dashboard with their own dependencies and tests. DodgeAI remains independent;
+no sibling checkout will be required. Python is optional for building and playing
+the game. See the [implementation plan](docs/superpowers/plans/2026-09-15-velocity-flow-royale-implementation.md)
+for the remaining training work; the Python entry points are not implemented yet.
+
 ## Building
 
 ### Prerequisites

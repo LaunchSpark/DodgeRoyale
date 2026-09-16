@@ -1,15 +1,15 @@
 # VelocityFlow for DodgeRoyale — design
 
-**Status:** approved design, ready for an implementation plan.
+**Status:** approved design; repository ownership revised 2026-09-16.
 **Date:** 2026-09-15.
-**Repositories:** `DodgeRoyale` (Rust/Bevy, simulation and encoder) and
-`DodgeAI` (Python/SB3, training stack).
+**Repository:** `DodgeRoyale` owns the Rust/Bevy simulation, encoder, and gym,
+plus the Python/SB3 trainer under `training/`. DodgeAI remains independent.
 
 ## 1. Goal
 
 Train a VelocityFlow v2 style policy to play DodgeRoyale's player, using
-DodgeAI's existing PPO stack, and later run it inside the game on native and
-web builds.
+a local PPO stack adapted from DodgeAI, and later run it inside the game on
+native and web builds. Training does not require a DodgeAI checkout or package.
 
 The architecture is ported. The trained weights are not: arena scale, hazards
 and the movement model all differ, so a DodgeRoyale policy is trained from
@@ -19,8 +19,8 @@ scratch.
 
 1. A headless, deterministic DodgeRoyale simulation.
 2. A Rust observation encoder and a `gym` protocol the Python trainer drives.
-3. A DodgeAI vectorised environment, a `velocity-flow-royale` architecture, and
-   dashboard wiring.
+3. A local vectorised environment, a `velocity-flow-royale` architecture,
+   training CLI, and dashboard in `training/dodge_royale/`.
 
 ### Out of scope
 
@@ -36,9 +36,9 @@ scratch.
 | Decision | Choice | Why |
 |---|---|---|
 | What the AI drives | The player | Matches DodgeAI; one agent, one arena |
-| Training stack | DodgeAI, Python, SB3 | Proven over 31.9M steps; only the environment is new |
+| Training stack | Repository-local Python, PyTorch, SB3 in `training/` | Adapt the proven VelocityFlow structure while keeping DodgeAI independent |
 | Bridge | `dodge-royale gym`, binary over stdin/stdout | No new crates; one encoder serves training and, later, in-game play; PyO3 would link MSVC Python against a GNU toolchain |
-| Observation | 256 px window, 64x64 cells of 4 px, player-centred, wrapping | 4 px cells keep 3-6 px hitboxes legible; ±128 px covers the 144-176 px chase lock-on and every threat that can reach the player within the 108-frame horizon |
+| Observation | 256 px window, 64x64 cells of 4 px, player-centred, wrapping | Intentional local observation at 4 px resolution. Threats can acquire or retain the player outside this window; complete threat visibility is not guaranteed. |
 | Decision interval | One action per simulation frame | The policy corrects more often; look ahead, execute one frame, reconsider |
 | Predicted paths | Hold the action `hold_frames` (default 24), then coast | Holding 1 frame makes the nine paths differ by under one cell; holding all 108 sends samples 259 px out, past the window |
 | Path origin | The player's actual position and velocity | Momentum carries about 4x current velocity, up to ~10 px; a rest-start path is misplaced by ~2.5 cells |
@@ -66,7 +66,9 @@ library:
 * `PlayerIntent(Vec2)` holds the requested direction. The library system
   `move_players` applies `advance_motion`. `game/player.rs` maps keyboard to
   intent, and the autopilot will write the same component, so a human and the
-  AI share one movement path.
+  AI share one movement path. Intent writers run before `PlayerSet::Move`;
+  camera and trail systems run after that set instead of depending on the old
+  `move_player` function.
 * `spawn_player_body` adds the simulation components (`Player`, `EnemyTarget`,
   collider, velocity, intent). The game adds sprite, trail, shadow, ghosting.
 
@@ -222,7 +224,7 @@ If transfer dominates, the fallback is packing channels 0-2 and 4 as
 bitfields: 115,128 -> 51,640 bytes, about 2.23x. Only if measured.
 
 **Measured**, 2026-09-16, `cargo bench --no-default-features --bench
-gym_throughput` on 8 workers. Inference and optimisation are DodgeAI's and are
+gym_throughput` on 8 workers. Inference and optimisation belong to the local Python trainer and are
 not covered here.
 
 | Stage | Per env step | 8 envs / step | 64 envs / step |
@@ -254,18 +256,21 @@ two. It is far short of the 15.6 ms the `write_all` line suggested, because
 that line skips float conversion, the length checks and building the reader's
 `Vec<f32>` -- it bounds the pipe, it does not predict the codec.
 
-Transfer still runs about 8x slower than the raw pipe, so what remains is the
-conversion and the per-array allocation rather than call overhead. Which of
-those dominates is not yet isolated. Packing is still available and still
+Transfer still runs about 8x slower than the raw pipe. That remainder is
+**unexplained overhead**: float conversion and the reader's per-array
+allocation are the candidates, but the benchmark has not isolated either, and
+neither has been shown to be the larger. Packing is still available and still
 costs a version bump; it is worth revisiting only once an end-to-end run with
 the Python client says transport rather than PPO is the limit.
 
 Two things the tables are not. The batch step is about 2.5x the
-single-threaded work divided by the workers, so there is coordination overhead
-to profile separately. And `simulate`, at 479-542 us a frame across runs, is
-the largest single cost in the system; nothing here says whether that is the
-4,950 pairwise collision checks or Bevy's per-`update` overhead. Both are
-their own profiling tasks.
+single-threaded work divided by the workers. Call that a **scaling gap** until
+coordination cost is measured directly -- nothing here separates it from
+memory contention, Bevy's own task pool, or the workers simply not being
+saturated. And `simulate`, at 479-542 us a frame across runs, is the largest
+single cost in the system; nothing here says whether that is the 4,950
+pairwise collision checks or Bevy's per-`update` overhead. Both are their own
+profiling tasks.
 
 ### 4.5 Tests
 
@@ -277,15 +282,32 @@ their own profiling tasks.
 * Protocol: in-memory round trip, byte-identical output for the same seed and
   actions, the auto-reset path.
 
-## 5. Section 2b — DodgeAI (Python)
+## 5. Section 2b — repository-local training (Python)
 
-New package `dodge/royale/`. No existing v2 code changes, so current
-checkpoints keep loading.
+New package `training/dodge_royale/`, installed from `training/pyproject.toml`,
+with its own dependency lock, tests, CLI, dashboard, configuration, and artifacts.
+Python dependencies are optional for building and playing the Rust game.
+
+Adapt the needed VelocityFlow policy, PPO lifecycle, telemetry, rewards, and
+dashboard code locally, recording the source revision/path and retaining
+applicable notices. Do not modify or import DodgeAI, install it as a dependency,
+link sibling files, or introduce a shared cross-repository package. Exclude the
+PICO-8 runtime, cartridges, old checkpoints, and unrelated architectures.
+Royale checkpoints use stable `dodge_royale` module paths from their first save.
+
+Both languages consume committed golden fixtures from root
+`tests/fixtures/gym-v1/`: Rust-generated `.bin` messages and a JSON manifest of
+seed/config, headers, shapes, and selected numeric values with offsets. Include
+asymmetric positions, moving hazards, blast phase, seam wrapping, and auto-reset
+with terminal observations. Python fixture tests need no Rust build; handwritten
+wire-image tests remain independent checks of the format.
 
 ### 5.1 `protocol.py`
 
-* Launches the binary from `DODGE_ROYALE_BIN`, defaulting to DodgeRoyale's
-  release executable.
+* Launches the binary from `DODGE_ROYALE_BIN`, defaulting to the active
+  checkout's `target/release/dodge-royale` (with the platform suffix), resolved
+  from the module location. External installs and custom Cargo target directories
+  use the explicit override; no sibling-repository lookup.
 * Parses the handshake into a `Layout` dataclass.
 * **Exact-length reads:** a loop until the frame is complete; one `readinto`
   need not fill it.
@@ -305,12 +327,16 @@ checkpoints keep loading.
   `env_method`. `VecEnv.__init__` calls `self.get_attr("render_mode")` and
   catches only `AttributeError`, so `get_attr` returns `[None] * n_envs` for
   `render_mode` and raises `AttributeError` for anything unsupported.
-* Reward from `rewards.json`: `survival_per_frame` per surviving frame, minus
+* Reward from local `rewards.json`: `survival_per_frame` per surviving frame, minus
   `death_penalty` on a hit, plus `uncontrolled_score_weight * 0.5 *
   enemy_deaths`. `edge_penalty` and `score_weight` do not apply (no walls, no
   score).
 * Infos: `terminal_observation`, `TimeLimit.truncated = truncated and not
   terminated`, seeds, and `training_events` with the keys telemetry charts.
+  Include the transition episode's `frames` and `run_frames` (equal because
+  Royale has no extra lives), and `run_over` when the episode ends. Auto-reset
+  must not replace these with the new episode's zero frame count. A 60-frame
+  episode must chart as one second in the local dashboard.
 
 ### 5.3 `velocity.py` — `VelocityFlowRoyaleExtractor`
 
@@ -326,29 +352,34 @@ Built from `Layout`, reusing v2's structure:
   the fixed `offsets` buffer; `grid_sample` with border padding; diagonal
   pairing; `0.985^frame` weights; negated danger concatenated with value
   features, giving 73 outputs.
-* `VelocityFlowPolicy` and `_FieldLogits` are reused unchanged.
+* `VelocityFlowPolicy` and `_FieldLogits` are ported into local `policies.py`,
+  retaining their behavior without importing `dodge`.
 
-### 5.4 Integration checklist (DodgeAI)
+### 5.4 Integration checklist (DodgeRoyale)
 
-* `ARCHITECTURES` gains `velocity-flow-royale`; `policy_class`,
-  `policy_kwargs`, and checkpoint architecture detection all handle it.
-* `GPU_ARCHITECTURES` includes it.
+* Local policy registration exposes `velocity-flow-royale`; policy creation,
+  kwargs, device selection, and checkpoint detection all handle it.
 * Hyperparameters apply to **new models and checkpoint loads**. v2's values,
   converted from 4-frame to 1-frame decisions: `gamma = 0.99^(1/4) ~= 0.9975`,
   `gae_lambda = 0.95^(1/4) ~= 0.987`. These preserve time scales; they do not
   make one-frame PPO equivalent to four-frame PPO. Starting values, to tune.
-* `dodge/training.py:608` hard-codes `gae_lambda=0.95` and the load path omits
-  lambda entirely. Both take the value from the architecture table.
+* Local `training.py` centralizes gamma and lambda for both new models and
+  checkpoint loads. Do not carry over DodgeAI's hard-coded CLI lambda or its
+  omission on reload.
 * The layout is persisted through `features_extractor_kwargs`. A loaded
   checkpoint's **full** layout is validated against the handshake — channel
   semantics, action ordering, horizons, hold duration — not only `obs_len`.
   Save and reload are covered by tests.
-* Game/architecture compatibility: a royale architecture refuses a PICO-8 env
-  and the reverse.
-* `train_ppo.py --game royale` builds `RoyaleVecEnv`.
-* `training_gui.py --game royale` branches the env factory
-  (`dodge/training.py:684`). Game Config shows enemy count, max frames and hold
-  frames only. Watch Agent is disabled until the autopilot spec.
+* Reject foreign checkpoints and incompatible layouts; no PICO-8 env factory
+  or checkpoint migration path is part of the Royale trainer.
+* `python -m dodge_royale.train` builds `RoyaleVecEnv`.
+* `python -m dodge_royale.dashboard` uses the same local training session.
+  Both entry points are Royale-only, with no `--game` switch. Game Config shows
+  enemy count, max frames and hold frames only. Watch Agent is disabled until
+  the autopilot spec.
+* The root README links to `training/README.md` for setup and launch commands.
+  CI builds Rust and tests Python from one revision. A clean checkout must train
+  with DodgeAI absent; no external cart, model, fixture, or user settings required.
 
 ### 5.5 Rollout memory
 

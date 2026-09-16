@@ -41,6 +41,43 @@ authentication, gameplay frameworks, or additional crates speculatively.
   save fabricated scores on normal startup. The app retains the Tokio runtime
   until exit, while the demo's Rayon and database pools close after startup.
 
+## Royale training ownership
+
+All VelocityFlow-for-Royale work belongs in this repository. Rust owns the shared
+renderer-free simulation (`src/simulation.rs`), observation encoder
+(`src/observation.rs`), and native gym server (`src/gym/`). Player intent feeds the
+same movement systems for human and policy control. Observations use the intentional
+256-pixel local window; the gym protocol is the Rust/Python boundary.
+
+The gym bypasses database and Tokio startup. Persistent bounded std workers create
+and retain their own Bevy apps with single-threaded schedules; apps never cross
+threads. The coordinator gathers owned results in environment-index order. This
+worker model is separate from the finite startup demo's Rayon pool.
+
+The wire format is frozen at protocol v1 and is guarded two ways that do not
+depend on each other: hand-written wire images in `src/gym/protocol/tests.rs` say
+what the bytes must be from first principles, and committed golden fixtures under
+`tests/fixtures/gym-v1/` are read back by `tests/gym_fixtures.rs` and by Python.
+Changing how the codec moves bytes is allowed; changing which bytes it moves is a
+version bump and a spec edit. Floats travel a block at a time through a reusable
+buffer rather than four bytes per call — measured, not assumed, by
+`benches/gym_throughput.rs`, which is also where a claim about transfer cost
+belongs. `serde_json` enables `float_roundtrip` because both the handshake layout
+and the fixture manifest carry floats as JSON, and its default parser is not
+correctly rounded.
+
+The Python trainer is planned under `training/dodge_royale/`, with its own package
+metadata, dependency lock, tests, CLI, dashboard, and local training artifacts.
+Golden protocol fixtures live at root `tests/fixtures/gym-v1/` for both languages.
+Build and validate both sides from one repository revision. Python dependencies
+remain optional for playing or building the game.
+
+DodgeAI remains independent. Adapt needed policy/training code locally with source
+revision/path attribution and applicable notices; do not modify or import DodgeAI,
+add it as a dependency, or require sibling checkouts, symlinks, cartridges, or old
+checkpoints. New checkpoints use stable `dodge_royale` module paths. The local
+trainer has Royale-only entry points and no PICO-8 environment or migration path.
+
 ## Player appearance
 
 The reference's player is drawn by `circfill` particles, not a sprite-sheet image

@@ -2,8 +2,8 @@
 
 **Status:** frozen. Any change to a message's meaning bumps
 `PROTOCOL_VERSION` and this document together.
-**Implemented by:** `src/gym/protocol.rs` (Rust) and `dodge/royale/protocol.py`
-(Python).
+**Implemented by:** `src/gym/protocol.rs` (Rust). The planned Python client is
+`training/dodge_royale/protocol.py` in this same repository.
 
 The trainer runs `dodge-royale gym` as a child process and speaks this protocol
 over its stdin and stdout. Stdout carries protocol bytes and nothing else;
