@@ -20,6 +20,15 @@ const PLAYER_SPEED: f32 = 937.5;
 const MOVEMENT_RESPONSE: f32 = 13.388_61;
 pub const MAX_FRAME_SECONDS: f32 = 0.05;
 
+/// Top speed in world units per second.
+///
+/// Published so observation code can bound how far a predicted path reaches
+/// without restating the number.
+#[must_use]
+pub const fn top_speed() -> f32 {
+    PLAYER_SPEED
+}
+
 /// Advance a player's position and velocity using smooth acceleration and braking.
 ///
 /// Input is normalized and elapsed time is capped at 50 ms. The returned

@@ -9,6 +9,7 @@ pub mod enemy;
 pub mod enemy_population;
 pub mod enemy_types;
 pub mod model;
+pub mod observation;
 pub mod rng;
 pub mod scale;
 pub mod simulation;
