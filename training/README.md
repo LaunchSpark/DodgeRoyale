@@ -4,9 +4,9 @@ This directory owns the Python trainer for DodgeRoyale: the gym protocol client,
 SB3 vector environment, VelocityFlow policy, PPO session, CLI, and dashboard.
 
 **Implemented so far:** `protocol.py` (the protocol-v1 client), `vec_env.py`
-(`RoyaleVecEnv`), `rewards.py`, `telemetry.py`, `velocity.py` (the extractor)
-and `policies.py`, with their tests. The PPO session, CLI and dashboard are
-still pending Task 11 of the
+(`RoyaleVecEnv`), `rewards.py`, `telemetry.py`, `velocity.py` (the extractor),
+`policies.py`, `training.py` (the PPO session) and `train.py` (the CLI), with
+their tests. Only `dashboard.py` is still pending, from Task 11 of the
 [implementation plan](../docs/superpowers/plans/2026-09-15-velocity-flow-royale-implementation.md);
 the layout and entry points below are the contract for that work.
 
@@ -25,6 +25,18 @@ messages in `../tests/fixtures/gym-v1/` and never build or run Rust. Live tests
 skip when no binary is built, but fail rather than skip when `DODGE_ROYALE_BIN`
 is set and broken.
 
+## Training
+
+```sh
+python -m dodge_royale.train --dry-run      # what would run, no gym launched
+python -m dodge_royale.train --check-env    # reset and step the batch, then exit
+python -m dodge_royale.train                # 8 envs, 1024 steps, 100 enemies
+python -m dodge_royale.train --resume-latest
+```
+
+Royale only: there is no `--game` switch. `--hold-frames` is the prediction
+hold, not an action repeat; the policy decides every frame either way.
+
 ## Planned layout
 
 ```text
@@ -38,8 +50,8 @@ training/
     policies.py           # Local policy classes and checkpoint registration  [done]
     rewards.py            # Royale reward configuration  [done]
     telemetry.py          # Training events and duration reporting  [done]
-    training.py           # PPO session and process lifecycle
-    train.py              # CLI entry point
+    training.py           # PPO session and process lifecycle  [done]
+    train.py              # CLI entry point  [done]
     dashboard.py          # Dashboard entry point
   tests/                  # Unit tests and live integration tests
   tools/                  # End-to-end benchmark

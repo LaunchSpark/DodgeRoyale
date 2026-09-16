@@ -119,6 +119,22 @@ checkpoint and a Royale one trained against a different layout before a model is
 built: equal lengths with reordered channels would load, run, and point every
 trained filter somewhere else.
 
+`training.py` holds one `SessionConfig` and one env factory, so the CLI and the
+dashboard cannot drift into training differently configured arenas. Every path
+out of a session closes the gym -- a failed build, a rejected checkpoint, a
+config restart, an interrupt -- because each one otherwise leaves a child
+process holding pipes. An interrupted run saves before it stops, so stopping is
+never expensive enough to avoid. The minibatch is bounded independently of the
+rollout: rollout size scales with envs, so a minibatch that scaled with it would
+grow until a device ran out, and the chosen size must also divide the rollout or
+PPO truncates it silently. The cap is measured, not guaranteed. `--check-env`
+runs a VecEnv smoke check rather than Gymnasium's scalar checker, which would
+reject a batched env for its shape and say nothing about whether it works.
+`--hold-frames` is the prediction hold and never an action repeat; confusing
+them would quarter the decision rate while every shape stayed correct. Both the
+fresh-model and resume paths take gamma and gae_lambda from the architecture
+table, since SB3 otherwise restores whatever a checkpoint was saved with.
+
 Shutdown never depends on the child cooperating. `close` is idempotent, writes
 CLOSE, then closes stdin only -- closing stdout first would break the server's
 one-byte acknowledgement and turn a clean exit into a failed one -- then waits,
