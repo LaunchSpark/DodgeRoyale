@@ -251,6 +251,17 @@ The gym serves headless arenas to a trainer over stdin and stdout
 ./run.sh bench 4        # any other env count
 ```
 
+Golden protocol fixtures live in
+[`tests/fixtures/gym-v1/`](tests/fixtures/gym-v1/README.md): real protocol bytes,
+committed, so the Python client can be tested without a Rust toolchain. Two Rust
+test sets guard the wire format independently — hand-written wire images, and the
+fixtures read back with the shipped codec. Regenerate after an intentional
+protocol or encoder change:
+
+```sh
+cargo run --locked --no-default-features --example gym_fixtures
+```
+
 The benchmark times simulation, encoding and pipe transfer separately, per env
 step, and prices the design’s packing fallback against them. It must run
 optimised; a debug build makes the simulation look like the bottleneck.

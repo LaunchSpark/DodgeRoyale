@@ -18,7 +18,11 @@ graphics = [
 [dependencies]
 bevy = { version = "0.19.1", default-features = false, features = ["std", "async_executor", "bevy_log"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# float_roundtrip: without it serde_json's parser is not correctly rounded and
+# can read a 17-digit decimal back one ULP out. The handshake carries the
+# layout's floats as JSON and the fixture manifest carries observation values,
+# so exact parsing is a protocol property here, not a convenience.
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
 fastrand = "2.5"
 
 # Browser code shares game data, but never a native runtime or DB driver.
