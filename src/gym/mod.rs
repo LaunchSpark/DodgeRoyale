@@ -4,3 +4,4 @@
 //! arenas, and never opens a window, a database or an async runtime.
 
 pub mod protocol;
+pub mod workers;

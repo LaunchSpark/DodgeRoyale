@@ -207,8 +207,8 @@ const fn mix(mut value: u64) -> u64 {
 /// message worth allocating for.
 #[must_use]
 pub fn max_payload(envs: u32, observation_values: usize) -> u64 {
-    let per_env = u64::try_from(observation_values.saturating_mul(4).saturating_add(64))
-        .unwrap_or(u64::MAX);
+    let per_env =
+        u64::try_from(observation_values.saturating_mul(4).saturating_add(64)).unwrap_or(u64::MAX);
     let envs = u64::from(envs).saturating_add(1);
     envs.saturating_mul(per_env)
         .saturating_mul(2)
