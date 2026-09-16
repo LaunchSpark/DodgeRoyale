@@ -296,3 +296,119 @@ fn the_payload_bound_covers_a_full_batch_and_refuses_more() {
         "but the bound still bounds something: {maximum}"
     );
 }
+
+/// The exact bytes `sample_batch` must occupy on the wire.
+///
+/// Written out by hand rather than captured from the writer, so it is a
+/// statement about the format and not a photograph of the implementation. A
+/// codec that changes how many calls it makes must still produce this.
+fn sample_batch_bytes() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.push(response::STEP);
+    bytes.extend_from_slice(&[2, 0, 0, 0]); // two envs
+
+    // Env 0: frame 17, running, two enemy deaths, episode seed 7, no reset.
+    bytes.extend_from_slice(&[17, 0, 0, 0]);
+    bytes.extend_from_slice(&[0, 0]); // terminated, truncated
+    bytes.extend_from_slice(&[2, 0, 0, 0]);
+    bytes.extend_from_slice(&[7, 0, 0, 0, 0, 0, 0, 0]);
+    bytes.extend_from_slice(&[0]); // no replacement seed
+    bytes.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]); // written even so
+
+    // Env 1: frame 3600, died as the budget ran out, replaced on seed zero.
+    bytes.extend_from_slice(&[0x10, 0x0E, 0, 0]);
+    bytes.extend_from_slice(&[1, 1]);
+    bytes.extend_from_slice(&[0, 0, 0, 0]);
+    bytes.extend_from_slice(&[8, 0, 0, 0, 0, 0, 0, 0]);
+    bytes.extend_from_slice(&[1]); // present, and the value is zero
+    bytes.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
+
+    // Observations: 0.5, -0.25, 1.0, 0.0.
+    bytes.extend_from_slice(&[4, 0, 0, 0]);
+    bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x3F]);
+    bytes.extend_from_slice(&[0x00, 0x00, 0x80, 0xBE]);
+    bytes.extend_from_slice(&[0x00, 0x00, 0x80, 0x3F]);
+    bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+
+    // One terminal observation, for env 1: 0.125, 0.25.
+    bytes.extend_from_slice(&[1, 0, 0, 0]);
+    bytes.extend_from_slice(&[1, 0, 0, 0]);
+    bytes.extend_from_slice(&[2, 0, 0, 0]);
+    bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x3E]);
+    bytes.extend_from_slice(&[0x00, 0x00, 0x80, 0x3E]);
+    bytes
+}
+
+#[test]
+fn an_auto_reset_step_response_is_bytes_we_can_write_out_by_hand() {
+    let mut written = Vec::new();
+    write_step(&mut written, &sample_batch()).expect("writing a batch");
+    assert_eq!(
+        written,
+        sample_batch_bytes(),
+        "the wire format is frozen: little endian, length prefixed, in this order"
+    );
+}
+
+#[test]
+fn a_reset_response_is_bytes_we_can_write_out_by_hand() {
+    let mut written = Vec::new();
+    write_reset(
+        &mut written,
+        &ResetBatch {
+            seeds: vec![11, 12],
+            observations: vec![0.5, -0.25],
+        },
+    )
+    .expect("writing a reset");
+
+    let mut expected = Vec::new();
+    expected.push(response::RESET);
+    expected.extend_from_slice(&[2, 0, 0, 0]);
+    expected.extend_from_slice(&[11, 0, 0, 0, 0, 0, 0, 0]);
+    expected.extend_from_slice(&[12, 0, 0, 0, 0, 0, 0, 0]);
+    expected.extend_from_slice(&[2, 0, 0, 0]);
+    expected.extend_from_slice(&[0x00, 0x00, 0x00, 0x3F]);
+    expected.extend_from_slice(&[0x00, 0x00, 0x80, 0xBE]);
+    assert_eq!(written, expected);
+}
+
+#[test]
+fn float_arrays_survive_any_length_a_chunked_codec_might_split() {
+    // A codec that moves floats in blocks has a seam. These lengths sit on
+    // both sides of every power-of-two block size it might pick, so a batch
+    // that ends mid-block is covered whatever the block turns out to be.
+    for count in [
+        0_usize, 1, 2, 255, 256, 257, 511, 512, 1_023, 1_024, 1_025, 4_097,
+    ] {
+        let observations: Vec<f32> = (0..count)
+            .map(|index| {
+                // Values that are not round: a byte swap or a dropped block
+                // has to show up as a different number, not a similar one.
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "The index is small and only needs to be distinct"
+                )]
+                let scaled = index as f32;
+                scaled.mul_add(0.001_25, -3.5)
+            })
+            .collect();
+        let batch = ResetBatch {
+            seeds: vec![1],
+            observations,
+        };
+
+        let mut bytes = Vec::new();
+        write_reset(&mut bytes, &batch).expect("writing a reset");
+        assert_eq!(
+            bytes.len(),
+            1 + 4 + 8 + 4 + count * 4,
+            "a float array is a count and that many four-byte values: {count}"
+        );
+        assert_eq!(
+            read_reset(&mut bytes.as_slice(), 1 << 20).expect("reading it back"),
+            batch,
+            "every value comes back bit for bit at length {count}"
+        );
+    }
+}

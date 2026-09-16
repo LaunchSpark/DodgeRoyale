@@ -234,19 +234,38 @@ not covered here.
 | The same bytes, one `write_all` | 19-20 us | 0.16 ms | 1.21 ms |
 
 Transfer does dominate: 1.4x the batch step at 8 envs, 1.6x at 64. **But
-packing is the wrong fix.** The pipe moves these bytes at about 5,500 MiB/s
-and the protocol gets 380-420 MiB/s, so roughly nine tenths of transfer is the
-codec, not the kernel: `write_floats` and `read_floats` move four bytes per
-call, which is 1.8M calls for a 64-env batch. Copying whole slices saves up to
-15.6 ms per step at 64 envs against packing's 9.3 ms, and it does not change a
-byte on the wire, so `PROTOCOL_VERSION` stays at 1. Do that first and measure
-again; packing is worth revisiting only if transfer still dominates after it.
+packing was not the first thing to try.** The pipe moves these bytes at about
+5,500 MiB/s and the protocol got 380-420 MiB/s, so most of transfer was the
+codec rather than the kernel: `write_floats` and `read_floats` moved four
+bytes per call, which is 1.8M calls for a 64-env batch.
 
-Two things the table is not. The batch step is 2.5x the single-threaded work
-divided by the workers, so there is coordination overhead to look at
-separately. And `simulate` at 487 us a frame is the largest single cost in the
-system; nothing here says whether that is the 4,950 pairwise collision checks
-or Bevy's per-`update` overhead.
+**After blocking the codec** (1,024 floats per pass, same bytes on the wire,
+`PROTOCOL_VERSION` unmoved), three runs:
+
+| Stage | 8 envs / step | 64 envs / step |
+|---|---|---|
+| Batch step | 1.73-1.82 ms | 10.76-10.91 ms |
+| Transfer | 1.57-1.71 ms | 14.19-14.62 ms |
+| Throughput | 514-559 MiB/s | 481-495 MiB/s |
+
+That is roughly 25% off transfer at 8 envs and 13% at 64, against a run-to-run
+spread of 3-9% on that stage; the 8-env figure is the more convincing of the
+two. It is far short of the 15.6 ms the `write_all` line suggested, because
+that line skips float conversion, the length checks and building the reader's
+`Vec<f32>` -- it bounds the pipe, it does not predict the codec.
+
+Transfer still runs about 8x slower than the raw pipe, so what remains is the
+conversion and the per-array allocation rather than call overhead. Which of
+those dominates is not yet isolated. Packing is still available and still
+costs a version bump; it is worth revisiting only once an end-to-end run with
+the Python client says transport rather than PPO is the limit.
+
+Two things the tables are not. The batch step is about 2.5x the
+single-threaded work divided by the workers, so there is coordination overhead
+to profile separately. And `simulate`, at 479-542 us a frame across runs, is
+the largest single cost in the system; nothing here says whether that is the
+4,950 pairwise collision checks or Bevy's per-`update` overhead. Both are
+their own profiling tasks.
 
 ### 4.5 Tests
 

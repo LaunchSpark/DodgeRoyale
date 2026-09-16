@@ -240,10 +240,29 @@ fn write_bytes<W: Write>(writer: &mut W, bytes: &[u8]) -> io::Result<()> {
     writer.write_all(bytes)
 }
 
+/// Floats converted per pass, in each direction.
+///
+/// A whole observation is 28,782 values, and a 64-env batch is 1.8M of them.
+/// Converting one at a time costs a call into the writer for every four bytes,
+/// which measured about a fourteenth of the pipe's own speed. A block amortises
+/// that without holding a second copy of the batch: 4 KiB, which stays in L1
+/// and never scales with the env count.
+const FLOAT_BLOCK: usize = 1_024;
+
+/// A float array: a `u32` count, then that many little-endian `f32`.
+///
+/// Byte for byte what writing them one at a time produced; only the number of
+/// calls changed, which is why `PROTOCOL_VERSION` does not move.
 fn write_floats<W: Write>(writer: &mut W, values: &[f32]) -> io::Result<()> {
     write_u32(writer, u32::try_from(values.len()).unwrap_or(u32::MAX))?;
-    for value in values {
-        writer.write_all(&value.to_le_bytes())?;
+    // One buffer for the whole array, refilled per block and never regrown.
+    let mut block = Vec::with_capacity(FLOAT_BLOCK.saturating_mul(4));
+    for values in values.chunks(FLOAT_BLOCK) {
+        block.clear();
+        for value in values {
+            block.extend_from_slice(&value.to_le_bytes());
+        }
+        writer.write_all(&block)?;
     }
     Ok(())
 }
@@ -407,13 +426,31 @@ fn read_bytes<R: Read>(reader: &mut R, maximum: u64) -> Result<Vec<u8>, Protocol
     Ok(bytes)
 }
 
+/// Read a float array, in blocks rather than four bytes at a time.
+///
+/// The declared count is still checked against `maximum` before anything is
+/// allocated, and the block is a fixed 4 KiB regardless of what was declared,
+/// so a hostile length cannot turn into a large read buffer.
 fn read_floats<R: Read>(reader: &mut R, maximum: u64) -> Result<Vec<f32>, ProtocolError> {
     let count = read_length(reader, maximum)?;
     let mut values = Vec::with_capacity(count);
-    let mut bytes = [0_u8; 4];
-    for _ in 0..count {
-        read_exact(reader, &mut bytes)?;
-        values.push(f32::from_le_bytes(bytes));
+    let mut block = vec![0_u8; FLOAT_BLOCK.saturating_mul(4)];
+
+    let mut remaining = count;
+    while remaining > 0 {
+        let taking = remaining.min(FLOAT_BLOCK);
+        let Some(bytes) = block.get_mut(..taking.saturating_mul(4)) else {
+            // Unreachable: `taking` is capped at the block's own length.
+            return Err(ProtocolError::Malformed(
+                "a float block outgrew its buffer".to_owned(),
+            ));
+        };
+        read_exact(reader, bytes)?;
+        for word in bytes.chunks_exact(4) {
+            let quad: [u8; 4] = word.try_into().map_err(|_| ProtocolError::Truncated)?;
+            values.push(f32::from_le_bytes(quad));
+        }
+        remaining = remaining.saturating_sub(taking);
     }
     Ok(values)
 }
