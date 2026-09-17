@@ -24,6 +24,7 @@ is bounded and the memory it *would* need is reported rather than allocated.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import platform
 import subprocess
@@ -69,6 +70,12 @@ class Environment:
     os: str
     rustc: str
     binary: str
+    #: Files differing from the recorded revision, and the diff itself. A
+    #: measurement taken on a dirty tree is only reproducible if the
+    #: difference travels with it.
+    dirty_files: tuple[str, ...] = ()
+    diff_sha256: str | None = None
+    diff_path: str | None = None
 
     @classmethod
     def capture(cls) -> "Environment":
@@ -83,6 +90,7 @@ class Environment:
         root = Path(__file__).resolve().parent.parent.parent
         revision = run("git", "-C", str(root), "rev-parse", "HEAD")
         status = run("git", "-C", str(root), "status", "--porcelain")
+        changed = tuple(line[3:] for line in status.splitlines() if line.strip())
         try:
             import psutil  # noqa: F401
 
@@ -115,7 +123,30 @@ class Environment:
             os=f"{platform.system()} {platform.release()}",
             rustc=rustc_version(run),
             binary=str(find_binary()),
+            dirty_files=changed,
         )
+
+    def preserve_diff(self, beside: Path) -> None:
+        """Write the working-tree diff next to the results, and hash it.
+
+        A number measured on a dirty tree is not reproducible from its
+        revision alone. Keeping the diff beside the result makes it so, and
+        the hash says the two belong together.
+        """
+        if not self.dirty:
+            return
+        import hashlib
+        import subprocess as sub
+
+        root = Path(__file__).resolve().parent.parent.parent
+        diff = sub.run(
+            ["git", "-C", str(root), "diff", "HEAD"],
+            capture_output=True, text=True, timeout=120,
+        ).stdout
+        path = beside.with_suffix(".diff")
+        path.write_text(diff, encoding="utf-8")
+        self.diff_path = path.name
+        self.diff_sha256 = hashlib.sha256(diff.encode("utf-8")).hexdigest()
 
 
 def rustc_version(run) -> str:
@@ -138,6 +169,20 @@ class StageResult:
 
 
 @dataclass
+class CycleStage:
+    """One stage's share of a single rollout-and-update cycle.
+
+    The only comparison that means anything: every stage measured over the
+    same amount of work. A round trip covers one batch step and an update
+    covers a whole rollout, so putting the two side by side says nothing.
+    """
+
+    name: str
+    seconds: float
+    share: float
+
+
+@dataclass
 class SizeResult:
     envs: int
     workers: int
@@ -146,6 +191,9 @@ class SizeResult:
     minibatch: int
     device: str
     stages: list[StageResult] = field(default_factory=list)
+    cycle: list[CycleStage] = field(default_factory=list)
+    cycle_seconds: float = 0.0
+    cycle_env_steps: int = 0
     rollout_observation_bytes: int = 0
     full_rollout_observation_bytes: int = 0
     peak_host_mib: float = 0.0
@@ -173,6 +221,50 @@ def measure_transport(env, steps: int) -> tuple[float, float]:
         env.step(actions)
     elapsed = time.perf_counter() - start
     return elapsed / steps, env.num_envs * steps / elapsed
+
+
+def measure_parse(env, repeats: int = 20) -> float:
+    """Seconds to parse one STEP message, with no waiting in the number.
+
+    Timing `decode_step` where it runs would measure the blocking read as
+    well: it reads from the pipe, so it does not return until the server has
+    finished simulating. That number is the round trip, not the parse. So one
+    real message is captured through a recording stream and then decoded from
+    memory, where the bytes are already there.
+    """
+    from dodge_royale.protocol import decode_step
+
+    class Recorder:
+        """A stream that hands bytes through and keeps a copy."""
+
+        def __init__(self, wrapped):
+            self._wrapped = wrapped
+            self.seen = bytearray()
+
+        def read(self, size=-1):
+            chunk = self._wrapped.read(size)
+            self.seen += chunk
+            return chunk
+
+    client = env._client
+    actions = np.zeros(env.num_envs, dtype=np.int64)
+    env.step(actions)  # settle
+
+    recorder = Recorder(client._process.stdout)
+    client._process.stdout = recorder
+    try:
+        env.step(actions)
+    finally:
+        client._process.stdout = recorder._wrapped
+    message = bytes(recorder.seen)
+
+    width = env.layout.observation_values
+    for _ in range(3):
+        decode_step(io.BytesIO(message), env.num_envs, width)
+    start = time.perf_counter()
+    for _ in range(repeats):
+        decode_step(io.BytesIO(message), env.num_envs, width)
+    return (time.perf_counter() - start) / repeats
 
 
 def measure_inference(model, observations: np.ndarray, repeats: int = 20) -> float:
@@ -302,6 +394,35 @@ def benchmark_size(envs: int, *, enemies: int, threads: int, device: str) -> Siz
             )
         )
 
+        parse = measure_parse(env)
+        result.stages.append(
+            StageResult(
+                "  of which: parsing the reply",
+                parse,
+                envs / parse,
+                "part of the round trip, decoded from memory so no waiting is counted",
+            )
+        )
+
+        # One rollout and the update that follows it, which is the cycle a
+        # training run actually repeats. Collection is the round trip plus the
+        # forward pass that chooses each action, repeated for every step.
+        collection = (seconds + forward) * BENCH_STEPS
+        total = collection + update
+        result.cycle_seconds = total
+        result.cycle_env_steps = envs * BENCH_STEPS
+        result.cycle = [
+            CycleStage(
+                "collection: round trip", seconds * BENCH_STEPS,
+                seconds * BENCH_STEPS / total,
+            ),
+            CycleStage(
+                "collection: inference", forward * BENCH_STEPS,
+                forward * BENCH_STEPS / total,
+            ),
+            CycleStage("optimization: one update", update, update / total),
+        ]
+
         metrics = MetricsCollector()
         start = time.perf_counter()
         model.learn(total_timesteps=config.total_timesteps, callback=metrics)
@@ -408,7 +529,16 @@ def report(environment: Environment, sizes: list[SizeResult], baselines: list[Ba
     lines.append("| Item | Value |")
     lines.append("|---|---|")
     for key, value in asdict(environment).items():
+        if key == "dirty_files":
+            value = ", ".join(value) or "none"
         lines.append(f"| {key.replace('_', ' ')} | {value} |")
+    if environment.dirty and environment.diff_path:
+        lines.append("")
+        lines.append(
+            f"The tree was not clean. The exact difference is preserved in "
+            f"`{environment.diff_path}` (sha256 `{environment.diff_sha256[:16]}`), "
+            "so these numbers reproduce from the revision plus that diff."
+        )
     lines.append("")
 
     for size in sizes:
@@ -428,6 +558,22 @@ def report(environment: Environment, sizes: list[SizeResult], baselines: list[Ba
                 f"{stage.env_steps_per_second:,.0f} | {stage.note} |"
             )
         lines.append("")
+        if size.cycle:
+            lines.append(
+                f"One rollout of {size.rollout_steps} steps and the update that "
+                f"follows it, {size.cycle_env_steps} env steps of work, "
+                f"{size.cycle_seconds * 1e3:,.0f} ms:"
+            )
+            lines.append("")
+            lines.append("| Stage of one cycle | Time | Share |")
+            lines.append("|---|---|---|")
+            for stage in size.cycle:
+                lines.append(
+                    f"| {stage.name} | {stage.seconds * 1e3:,.0f} ms | "
+                    f"{stage.share:.0%} |"
+                )
+            lines.append("")
+
         lines.append(
             f"Rollout observations at {size.rollout_steps} steps: "
             f"{size.rollout_observation_bytes / 1024**2:,.0f} MiB. "
@@ -500,6 +646,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
 
+    if args.out:
+        environment.preserve_diff(args.out)
     text = report(environment, sizes, baselines)
     if args.out:
         args.out.write_text(text + "\n", encoding="utf-8")
