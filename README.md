@@ -23,8 +23,9 @@ replacement enemies use the usual distant placement. All enemies start at rest.
 The VelocityFlow trainer lives in this repository under
 [`training/`](training/README.md), alongside the Rust simulation, observation
 encoder, and gym protocol. It is a uv project: the protocol client, policy, PPO
-session and CLI are implemented and tested; the marimo dashboard is still
-pending. DodgeAI remains independent, and no sibling checkout is required.
+session, CLI and marimo dashboard are implemented and tested, with
+[measured results](docs/superpowers/results/2026-09-17-benchmark-royale.md).
+DodgeAI remains independent, and no sibling checkout is required.
 
 Python is optional for building and playing the game. To train:
 
@@ -32,7 +33,9 @@ Python is optional for building and playing the game. To train:
 cargo build --release --no-default-features   # the gym binary the trainer drives
 cd training
 uv sync --extra dashboard --extra cu126       # or --extra cpu without an NVIDIA GPU
-uv run python -m dodge_royale.train --check-env
+uv run python -m dodge_royale.train --check-env          # verify both halves talk
+uv run python -m dodge_royale.train                     # train
+uv run marimo run dodge_royale/dashboard.py --no-sandbox   # or drive it from a dashboard
 ```
 
 [`training/README.md`](training/README.md) has the full setup, including what to

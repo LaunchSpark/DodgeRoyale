@@ -1,0 +1,112 @@
+{
+  "environment": {
+    "revision": "b7facf78f5c7dd42f58d0bf7f4368944362b78e4",
+    "dirty": true,
+    "python": "3.12.2",
+    "torch": "2.14.0+cu126",
+    "cuda_available": true,
+    "device_name": "NVIDIA GeForce GTX 1070",
+    "cpu": "Intel64 Family 6 Model 158 Stepping 9, GenuineIntel",
+    "logical_cores": 8,
+    "ram_gib": 15.9,
+    "os": "Windows 10",
+    "rustc": "rustc 1.95.0 (59807616e 2026-04-14)",
+    "binary": "D:\\projects\\DodgeRoyale-vfr\\target\\release\\dodge-royale.exe"
+  },
+  "sizes": [
+    {
+      "envs": 8,
+      "workers": 2,
+      "enemies": 100,
+      "rollout_steps": 16,
+      "minibatch": 128,
+      "device": "cuda:0",
+      "stages": [
+        {
+          "name": "round trip (simulate + encode + transport)",
+          "seconds_per_batch": 0.0053194624997559,
+          "env_steps_per_second": 1503.9113444952577,
+          "note": "one STEP answered by the gym; the Rust benchmark splits it further"
+        },
+        {
+          "name": "inference (one batch forward)",
+          "seconds_per_batch": 0.004356294998433441,
+          "env_steps_per_second": 1836.4229242686422,
+          "note": ""
+        },
+        {
+          "name": "optimization (one PPO update)",
+          "seconds_per_batch": 0.08681430004071444,
+          "env_steps_per_second": 1474.4114729943126,
+          "note": "16 steps x 8 envs, minibatch 128, 1 epoch"
+        },
+        {
+          "name": "end to end (learn)",
+          "seconds_per_batch": 0.017706200000247918,
+          "env_steps_per_second": 451.81913679321286,
+          "note": "256 env steps over 32 batch steps and 2 updates; 0.57 s total"
+        }
+      ],
+      "rollout_observation_bytes": 14736384,
+      "full_rollout_observation_bytes": 943128576,
+      "peak_host_mib": 1585.44140625,
+      "peak_device_mib": 654.3388671875
+    },
+    {
+      "envs": 64,
+      "workers": 2,
+      "enemies": 100,
+      "rollout_steps": 16,
+      "minibatch": 128,
+      "device": "cuda:0",
+      "stages": [
+        {
+          "name": "round trip (simulate + encode + transport)",
+          "seconds_per_batch": 0.044724456249241484,
+          "env_steps_per_second": 1430.984418085249,
+          "note": "one STEP answered by the gym; the Rust benchmark splits it further"
+        },
+        {
+          "name": "inference (one batch forward)",
+          "seconds_per_batch": 0.01144858000043314,
+          "env_steps_per_second": 5590.212934493069,
+          "note": ""
+        },
+        {
+          "name": "optimization (one PPO update)",
+          "seconds_per_batch": 0.6291736000566743,
+          "env_steps_per_second": 1627.5317335434302,
+          "note": "16 steps x 64 envs, minibatch 128, 1 epoch"
+        },
+        {
+          "name": "end to end (learn)",
+          "seconds_per_batch": 0.11048599687637761,
+          "env_steps_per_second": 579.2589270078214,
+          "note": "2048 env steps over 32 batch steps and 2 updates; 3.54 s total"
+        }
+      ],
+      "rollout_observation_bytes": 117891072,
+      "full_rollout_observation_bytes": 7545028608,
+      "peak_host_mib": 1824.75390625,
+      "peak_device_mib": 669.2275390625
+    }
+  ],
+  "baselines": [
+    {
+      "policy": "idle",
+      "episodes": 16,
+      "mean_frames": 283.8125,
+      "median_frames": 276.0,
+      "deaths": 16,
+      "timeouts": 0
+    },
+    {
+      "policy": "random",
+      "episodes": 16,
+      "mean_frames": 292.375,
+      "median_frames": 299.0,
+      "deaths": 16,
+      "timeouts": 0
+    }
+  ]
+}

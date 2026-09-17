@@ -166,6 +166,26 @@ parameter rather than from what was requested, so a run that fell back to CPU
 says so. Watch Agent stays absent until in-game inference exists; it is the
 autopilot spec, written after a policy trains.
 
+Measured, not assumed. `benches/gym_throughput.rs` splits the Rust side and
+`training/tools/benchmark_royale.py` splits the Python pipeline; results live in
+`docs/superpowers/results/`, with the revision, hardware and versions recorded
+beside every number. A claim about where the time goes belongs in one of those
+rather than in a comment. What they currently say: simulation is 541 us an env
+step against 68 us to encode, and at 64 envs one PPO update costs 629 ms against
+45 ms to collect the batch, so the optimizer is the wall at scale rather than
+the arenas. Idle and random policies survive 284 and 292 frames, which is the
+bar a trained policy has to clear; a run reporting the full 3,600-frame budget
+has been censored by the clock rather than succeeded.
+
+The client reads the gym's stdout through a `BufferedReader` and writes requests
+unbuffered. A raw pipe read returns only what has already arrived, so a 7 MB
+64-env batch became thousands of small reads and transport collapsed from 1,012
+to 117 env-steps/s while the 8-env case still looked healthy. Requests stay
+unbuffered because they are tiny and a request the server never sees is a
+deadlock. Rollout memory is why eight environments is the training default and
+sixty-four is a benchmark configuration: at 1,024 steps a 64-env rollout holds
+7.03 GiB of observations before any training tensors.
+
 DodgeAI remains independent. Adapt needed policy/training code locally with source
 revision/path attribution and applicable notices; do not modify or import DodgeAI,
 add it as a dependency, or require sibling checkouts, symlinks, cartridges, or old

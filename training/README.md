@@ -9,9 +9,11 @@ setup needs both halves of the repository.
 (`RoyaleVecEnv`), `rewards.py`, `telemetry.py`, `velocity.py` (the extractor),
 `policies.py`, `training.py` (the PPO session) and `train.py` (the CLI), with
 their tests, plus `metrics.py`, `worker.py` and `dashboard.py` (the marimo
-dashboard). That completes Tasks 8-11 of the
-[implementation plan](../docs/superpowers/plans/2026-09-15-velocity-flow-royale-implementation.md);
-Tasks 12-13 are the cross-language acceptance and regression gates.
+dashboard). Tasks 8-13 of the
+[implementation plan](../docs/superpowers/plans/2026-09-15-velocity-flow-royale-implementation.md)
+are complete, with [measured results](../docs/superpowers/results/2026-09-17-benchmark-royale.md).
+The one item left is a manual check of the graphical game, which needs a human
+at a window.
 
 ## Setting up
 
@@ -142,10 +144,18 @@ to a different build, so a typo cannot train you against the wrong binary.
 ## Running the tests
 
 ```sh
-uv run pytest                 # everything; live tests skip without a binary
-uv run pytest -m live         # only the tests that drive a real gym
-uv run pytest -m "not live"   # explicitly skip those
+uv run pytest                    # everything, browser tests included
+uv run pytest -m "not browser"   # skip the slow Playwright suite
+uv run pytest -m live            # only the tests that drive a real gym
+uv run pytest -m "not live"      # only the ones that need no binary
 ```
+
+Three groups. Most tests need neither Rust nor a gym. `live` tests drive the
+real binary and skip when there is none. `browser` tests additionally launch a
+marimo server and Chromium, which needs a one-time
+`uv run playwright install chromium`; they are the only coverage of the
+dashboard's controls, since a button press only reaches the worker through
+marimo's reactive graph.
 
 Fixture tests read the committed messages in `../tests/fixtures/gym-v1/` and
 never build or run Rust, which is why most of the suite passes on a machine
@@ -168,6 +178,23 @@ hold, not an action repeat; the policy decides every frame either way.
 Checkpoints land in `training/checkpoints/`, ignored by Git along with
 `training/runs/` and `training/.venv/`. `rewards.json` holds the reward
 controls that apply to Royale; `--rewards` points at a different file.
+
+## Benchmarking
+
+```sh
+uv run python tools/benchmark_royale.py                  # 8 and 64 envs, plus baselines
+uv run python tools/benchmark_royale.py --envs 8 --skip-baselines
+uv run python tools/benchmark_royale.py --out results.md --json results.json
+```
+
+Times the round trip, inference, optimization and the whole `learn` separately,
+and records the revision, hardware, versions, device, rollout shape and peak
+memory beside them. It reports what a full 1,024-step rollout *would* cost
+rather than allocating one: at 64 envs that is 7.03 GiB of observations before
+any training tensors.
+
+`cargo bench --locked --no-default-features --bench gym_throughput`, from the
+repository root, splits the Rust side into simulation, encoding and transfer.
 
 ## The dashboard
 

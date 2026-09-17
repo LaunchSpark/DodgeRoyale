@@ -1,8 +1,8 @@
 # VelocityFlow for DodgeRoyale implementation plan
 
 **Date:** 2026-09-15  
-**Status:** Tasks 1-11 implemented on `velocity-flow-royale`; graphical smoke check
-still outstanding. Tasks 12-13 pending. Ownership revised 2026-09-16; the task
+**Status:** Tasks 1-13 implemented on `velocity-flow-royale`; the manual
+graphical check is the one item still outstanding. Ownership revised 2026-09-16; the task
 checkboxes below are acceptance criteria, not an execution log.  
 **Design:** [VelocityFlow for DodgeRoyale](../specs/2026-09-15-velocity-flow-royale-design.md)
 
@@ -442,20 +442,22 @@ dashboard from this repository with DodgeAI absent from paths and dependencies.
 **Files:** create `training/tests/test_integration.py`; extend Rust
 subprocess tests and numeric fixtures as needed.
 
-- [ ] Build the native release binary and point DODGE_ROYALE_BIN to its exact
+- [x] Build the native release binary and point DODGE_ROYALE_BIN to its exact
   absolute path. Test actual handshake, RESET, STEP, CLOSE, and error paths.
-- [ ] Replay seed/action fixtures across processes and worker counts. Compare
+- [x] Replay seed/action fixtures across processes and worker counts. Compare
   exact observations/metadata on the same build/platform. Do not promise
   cross-platform floating-point bit identity or full graphical/headless entity
   allocation identity.
-- [ ] Run one real PPO update with two envs, n_steps=16, a compatible small
+- [x] Run one real PPO update with two envs, n_steps=16, a compatible small
   minibatch, and one epoch. Assert finite metrics and at least one trainable
   parameter changes. Save, reload, and perform another prediction/step.
-- [ ] Test death and timeout terminal observations, reset seeds, frozen retained
+- [x] Test death and timeout terminal observations, reset seeds, frozen retained
   arrays, dashboard duration, and ordinary checkpoint compatibility. Ensure
   external-process tests always have deadlines and clean up on assertion failure.
-- [ ] Check both Rust feature configurations and the WASM library build. Manually
+- [x] Check both Rust feature configurations and the WASM library build. Manually
   verify graphical controls and screen lifecycle after the extraction.
+
+**Status:** complete except the manual graphical check, which is recorded as unverified below.
 
 Run the required Rust gates from the Rust repository:
 
@@ -490,48 +492,51 @@ acceptance run must not. Verify a clean checkout can run without DodgeAI present
 ## Task 13 - Measure performance and finish developer documentation
 
 **Dependencies:** 12.  
+**Status:** complete. Results in [benchmark results](../results/2026-09-17-benchmark-royale.md).  
 **Files:** add `training/tools/benchmark_royale.py` and a benchmark-results
 document alongside this plan; update root and training READMEs, `AGENTS.md`, and
 relevant task-runner/CI commands.
 
-- [ ] Benchmark release simulation, encoding, transport/decoding, policy
+- [x] Benchmark release simulation, encoding, transport/decoding, policy
   inference, and PPO optimization separately at 8 and 64 envs. Add opt-in
   native timing summaries on stderr for simulation versus encoding; avoid
   per-step logging. Report env-steps/second separately from batch round trips.
-- [ ] Record hardware, repository revision, dependency versions, seed suite,
+- [x] Record hardware, repository revision, dependency versions, seed suite,
   enemy count, holds, worker count, rollout/minibatch sizes, precision/device,
   wall time, and peak host/device memory. Synchronize accelerator work when
   timing it. Use short rollouts for the 64-env pipeline benchmark until its
   memory budget is measured; do not launch an accidental 7 GiB rollout.
-- [ ] Evaluate idle and seeded-random policies over the same bounded seed suite.
+- [x] Evaluate idle and seeded-random policies over the same bounded seed suite.
   Report survival frames and termination/truncation rates. Treat maximum-length
   timeouts as censored survival, not proof of learned skill. These are baseline
   checks, not a long policy-training run.
-- [ ] Document launch commands for both CLI and GUI, the intentional local
+- [x] Document launch commands for both CLI and GUI, the intentional local
   observation, seed/reset semantics, checkpoint layout checks, reward knobs,
   and diagnostics. Record persistent worker ownership and single-threaded arena
   schedules in AGENTS.md, distinguishing this path from existing Tokio/Rayon
   startup behavior.
-- [ ] Keep compression and further batching as measured follow-up work. If a
+- [x] Keep compression and further batching as measured follow-up work. If a
   benchmark fails a memory/throughput target, report the result and recommend
   a specific next experiment; do not silently change the observation contract.
 
 ## Completion checklist
 
 - [ ] Shared movement and scheduling preserve playable graphical behavior.
-- [ ] Frame-zero initialization is seeded, bounded, and contains no hidden play.
-- [ ] The first public step advances one simulation frame; completed episodes
+      **Not verified.** Needs a human at a window; automated coverage
+      reaches the headless simulation only.
+- [x] Frame-zero initialization is seeded, bounded, and contains no hidden play.
+- [x] The first public step advances one simulation frame; completed episodes
   remain frozen until reset.
-- [ ] Rust observations and Python sampling agree numerically across seams,
+- [x] Rust observations and Python sampling agree numerically across seams,
   Y orientation, units, cell centers, and horizon ordering.
-- [ ] Worker count changes do not change seeded output; failures and shutdown
+- [x] Worker count changes do not change seeded output; failures and shutdown
   do not strand workers or child processes.
-- [ ] Auto-reset preserves terminal observation, frame count, flags, rewards,
+- [x] Auto-reset preserves terminal observation, frame count, flags, rewards,
   and old/new seeds correctly.
-- [ ] Training installs and runs with no DodgeAI checkout or package available;
+- [x] Training installs and runs with no DodgeAI checkout or package available;
   all fixtures, tests, entry points, dependencies, and artifacts are local.
-- [ ] Native database smoke paths remain compatible; gym has no database/runtime
+- [x] Native database smoke paths remain compatible; gym has no database/runtime
   startup dependency.
-- [ ] A real PPO update and save/reload pass; dashboard survival reports seconds.
-- [ ] Required checks and benchmark results are recorded with actual outcomes,
+- [x] A real PPO update and save/reload pass; dashboard survival reports seconds.
+- [x] Required checks and benchmark results are recorded with actual outcomes,
   including any unavailable tool or platform limitation.
