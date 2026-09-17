@@ -102,7 +102,7 @@
       .controls-label { margin-right: 5px; color: #52666e; }
       kbd { font: inherit; padding: 5px 7px; border: 1px solid #b4bcb8; border-bottom-width: 2px; }
 
-      button {
+      button, .footer-actions a {
         font: inherit;
         font-size: 11px;
         color: inherit;
@@ -115,8 +115,8 @@
         text-underline-offset: 4px;
       }
 
-      button:hover { color: #2b89bd; }
-      button:focus-visible { outline: 2px solid #2b89bd; outline-offset: 4px; }
+      button:hover, .footer-actions a:hover { color: #2b89bd; }
+      button:focus-visible, .footer-actions a:focus-visible { outline: 2px solid #2b89bd; outline-offset: 4px; }
       noscript { display: block; padding: 24px; }
 
       @keyframes waiting { to { transform: translateY(-8px); } }
@@ -130,7 +130,7 @@
         .footer-actions { width: 100%; justify-content: space-between; }
         .controls { gap: 6px; font-size: 10px; }
         .controls-label { display: none; }
-        button { font-size: 10px; padding: 2px 0; }
+        button, .footer-actions a { font-size: 10px; padding: 2px 0; }
       }
     </style>
   </head>
@@ -168,7 +168,7 @@
           <kbd>R</kbd><span>recenter</span>
         </div>
         <div class="footer-actions">
-          <button id="open-dashboard" type="button" data-dashboard-url="http://127.0.0.1:2718/">AI dashboard ↗</button>
+          <a id="open-dashboard" href="http://127.0.0.1:2718/" target="_blank" rel="noopener noreferrer">AI dashboard ↗</a>
           <button id="focus-game" type="button">Focus game ↗</button>
         </div>
       </footer>
@@ -182,10 +182,6 @@
       const focusGame = () => canvas.focus({ preventScroll: true });
 
       document.querySelector("#focus-game").addEventListener("click", focusGame);
-      const dashboard = document.querySelector("#open-dashboard");
-      dashboard.addEventListener("click", () => {
-        window.open(dashboard.dataset.dashboardUrl, "_blank", "noopener,noreferrer");
-      });
       canvas.addEventListener("pointerdown", focusGame);
 
       // Winit uses this exception to hand its event loop over to the browser.

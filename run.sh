@@ -9,7 +9,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # rustup edits the saved PATH, but shells opened before the install miss it.
-if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
+# The web task also needs Bevy CLI from the same directory.
+if { ! command -v cargo >/dev/null 2>&1 || ! command -v bevy >/dev/null 2>&1; } \
+    && [ -x "$HOME/.cargo/bin/cargo" ]; then
     PATH="$HOME/.cargo/bin:$PATH"
 fi
 
@@ -41,6 +43,68 @@ assert_graphics() {
         echo "ERROR: $BIN has no renderer (headless build). Run: ./run.sh build" >&2
         exit 1
     fi
+}
+
+dashboard_python=""
+dashboard_pid=""
+
+dashboard_ready() {
+    "$dashboard_python" -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:2718/health", timeout=0.5).close()' \
+        >/dev/null 2>&1
+}
+
+stop_dashboard() {
+    if [ -n "$dashboard_pid" ]; then
+        kill "$dashboard_pid" 2>/dev/null || true
+        wait "$dashboard_pid" 2>/dev/null || true
+    fi
+}
+
+start_dashboard() {
+    if [ -x "training/.venv/Scripts/python.exe" ]; then
+        dashboard_python="$PWD/training/.venv/Scripts/python.exe"
+    elif [ -x "training/.venv/bin/python" ]; then
+        dashboard_python="$PWD/training/.venv/bin/python"
+    else
+        echo "ERROR: install the dashboard first: cd training && uv sync --extra dashboard --extra cpu (or cu126)" >&2
+        return 1
+    fi
+
+    if dashboard_ready; then
+        echo "--> using the dashboard already running at http://127.0.0.1:2718/"
+        return 0
+    fi
+
+    echo "--> starting marimo at http://127.0.0.1:2718/"
+    (
+        cd training
+        "$dashboard_python" -m marimo run dodge_royale/dashboard.py \
+            --no-sandbox --headless --host 127.0.0.1 --port 2718 --no-token
+    ) &
+    dashboard_pid=$!
+    trap stop_dashboard EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
+    local attempt
+    for ((attempt = 0; attempt < 100; attempt++)); do
+        if dashboard_ready; then
+            return 0
+        fi
+        if ! kill -0 "$dashboard_pid" 2>/dev/null; then
+            echo "ERROR: marimo exited before it became ready" >&2
+            wait "$dashboard_pid" || true
+            return 1
+        fi
+        sleep 0.2
+    done
+    echo "ERROR: marimo did not become ready at http://127.0.0.1:2718/" >&2
+    return 1
+}
+
+run_web_with_dashboard() {
+    start_dashboard
+    "$@"
 }
 
 case "${1:-buildAndRun}" in
@@ -103,7 +167,10 @@ bench)
     cargo bench --locked --no-default-features --bench gym_throughput -- "${@:2}"
     ;;
 web)
-    bevy run --locked web --open
+    run_web_with_dashboard bevy run --locked web --open
+    ;;
+web-docker)
+    run_web_with_dashboard docker compose up --build web
     ;;
 *)
     cat <<'USAGE'
@@ -119,7 +186,8 @@ usage: ./run.sh [command]
   gym           serve headless arenas to a trainer over stdin/stdout
   bench         time simulation, encoding and pipe transfer per env step
   fmt           format the workspace
-  web           browser build, needs the Bevy CLI
+  web           browser game and marimo dashboard, needs Bevy CLI and training env
+  web-docker    Docker web game with the same host dashboard
 USAGE
     exit 1
     ;;

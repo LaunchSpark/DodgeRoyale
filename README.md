@@ -89,7 +89,7 @@ graphics binary afterwards; if you run those commands through `cargo` directly, 
 ### Browser
 
 ```sh
-bevy run --locked web --open
+./run.sh web
 ```
 
 The game opens at <http://127.0.0.1:4000>. Keep the command running while playing;
@@ -98,17 +98,12 @@ WebAssembly, and a keyboard. [Bevy CLI](https://thebevyflock.github.io/bevy_cli/
 compiles Rust to WebAssembly, generates the JavaScript bindings, and serves
 `web/index.html`.
 
-The browser game's **AI dashboard** button opens the local marimo server in a
-new tab. Start it in another terminal before clicking:
-
-```sh
-cd training
-uv run marimo run dodge_royale/dashboard.py --no-sandbox --headless --host 127.0.0.1 --port 2718
-```
-
-The button points to `http://127.0.0.1:2718/` on the browser's machine. For a
-hosted game, set `data-dashboard-url` on the button in `web/index.html` to the
-dashboard's reachable URL. The browser cannot start the Python server itself.
+`./run.sh web` also starts marimo from the existing `training/.venv`, waits
+until it is ready, and stops that server when the web command exits. Install the
+dashboard extra once as described under AI training above. If marimo is already
+running on port 2718, the runner reuses it and leaves it running. The browser
+game's **AI dashboard** link opens it in a new tab. For a hosted game, change
+the link's `href` in `web/index.html` to the dashboard's reachable URL.
 
 To produce a static release bundle:
 
@@ -125,14 +120,16 @@ To build without installing any Rust tools, use Docker (next section).
 ## Docker
 
 ```sh
-docker compose up --build web
+./run.sh web-docker
 ```
 
 Open <http://localhost:8080>. This builds the WebAssembly bundle and serves it
-through a non-root nginx container. Rendering happens in your browser. The `web`
-service runs independently of PostgreSQL and the native app. Set `WEB_PORT` to use
-another host port. The first build installs the pinned Rust/Bevy tools and compiles
-dependencies; later builds reuse Docker layers and Cargo caches.
+through a non-root nginx container while the same runner starts marimo on the
+host. Rendering happens in your browser. The `web` service runs independently
+of PostgreSQL and the native app. Set `WEB_PORT` to use another host port. The
+first build installs the pinned Rust/Bevy tools and compiles dependencies;
+later builds reuse Docker layers and Cargo caches. Running Compose directly
+serves only the static game, without starting the host dashboard.
 
 The native foundations remain available as separate services:
 
