@@ -64,7 +64,12 @@ torch = [
 [dependency-groups]
 # PEP 735. `uv sync` installs this by default, so a fresh checkout can run the
 # tests without anyone having to know which extra to ask for.
-dev = ["pytest>=8.0"]
+dev = [
+    "pytest>=8.0",
+    # Drives the dashboard in a real browser. The notebook's controls only
+    # work through marimo's reactive graph, which no in-process test reaches.
+    "pytest-playwright>=0.5",
+]
 
 [tool.setuptools.packages.find]
 include = ["dodge_royale*"]
@@ -72,4 +77,7 @@ include = ["dodge_royale*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Integration tests need a built gym binary; unit and fixture tests never do.
-markers = ["live: needs a built dodge-royale binary"]
+markers = [
+    "live: needs a built dodge-royale binary",
+    "browser: launches a marimo server and a browser; slow",
+]

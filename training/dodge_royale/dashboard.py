@@ -68,8 +68,12 @@ def _(mo):
 def _(mo):
     # The page's clock. Each tick re-runs the cells that read it, which is how
     # the numbers update without anything polling in a loop.
+    # Every option has to be a real interval. "off" is not a duration, and an
+    # invalid option leaves the element without a working clock: the page then
+    # only updates when a button is pressed, which looks exactly like a run
+    # that never leaves "starting".
     refresh = mo.ui.refresh(
-        options=["off", "1s", "2s", "5s"], default_interval="1s", label="Refresh"
+        options=["1s", "2s", "5s", "10s"], default_interval="1s", label="Refresh"
     )
     refresh
     return (refresh,)
@@ -230,6 +234,12 @@ def _(
         action = "script mode: started a short run"
     elif start_button.value and problem:
         action = f"refused: {problem}"
+    elif start_button.value and running is not None and running.state.is_active:
+        # The worker outlives a browser session on purpose: reloading the page
+        # should find the run still going rather than orphan it. That makes
+        # "already running" an ordinary thing to say, not an error to raise,
+        # and asking rather than catching keeps it off the exception path.
+        action = f"a run is already {running.state.value}; stop it first"
     elif start_button.value:
         start_worker(staged, resume=resume_path.value.strip() or None)
         action = "started"
@@ -258,7 +268,12 @@ def _(
 
 @app.cell
 def _(action, active_worker, mo, refresh, script_mode):
-    refresh, action  # re-run on every tick and after every control
+    # `refresh.value`, not `refresh`. marimo's reactivity is over variable
+    # assignments, so depending on the element itself re-runs this cell only
+    # when the cell that *created* it re-runs -- never on a tick. Reading the
+    # value is what subscribes to the clock, and without it the page freezes on
+    # whatever state it happened to see when a button was last pressed.
+    refresh.value, action
 
     # In script mode there is no clock, so wait for the run rather than
     # snapshotting an empty one.
