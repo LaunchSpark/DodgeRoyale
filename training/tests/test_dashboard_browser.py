@@ -135,6 +135,18 @@ def press(page, label: str) -> None:
 
 
 @pytest.fixture
+def gyms_before():
+    """How many gyms were already running before a test started.
+
+    Counted rather than assumed to be zero: another checkout, the browser
+    game, or a run someone left going would otherwise fail these tests for a
+    reason that has nothing to do with the dashboard. What matters is what
+    this test starts and stops, which is a difference.
+    """
+    return gym_processes()
+
+
+@pytest.fixture
 def dashboard(server, page):
     """A loaded page that is left with no run going, whatever the test did."""
     page.set_default_timeout(60_000)
@@ -156,9 +168,9 @@ def dashboard(server, page):
 # --- the page renders ----------------------------------------------------
 
 
-def test_the_page_loads_with_no_run_and_no_gym(dashboard):
+def test_the_page_loads_with_no_run_and_no_gym(dashboard, gyms_before):
     assert "idle" in state_text(dashboard)
-    assert gym_processes() == 0, "loading the page must not start a gym"
+    assert gym_processes() == gyms_before, "loading the page must not start a gym"
     assert dashboard.get_by_text("No run yet").count() >= 1
 
 
@@ -179,24 +191,23 @@ def test_the_configuration_summary_renders(dashboard):
 # --- the lifecycle, through the buttons ----------------------------------
 
 
-def test_start_runs_and_stop_cleans_up(dashboard):
-    assert gym_processes() == 0
+def test_start_runs_and_stop_cleans_up(dashboard, gyms_before):
     press(dashboard, "Start")
     wait_for_state(dashboard, "running", "starting", timeout=120)
 
     # A real gym is now a child of the marimo server.
     deadline = time.monotonic() + 60
-    while time.monotonic() < deadline and gym_processes() == 0:
+    while time.monotonic() < deadline and gym_processes() <= gyms_before:
         dashboard.wait_for_timeout(250)
-    assert gym_processes() >= 1, "Start must launch a gym"
+    assert gym_processes() > gyms_before, "Start must launch a gym"
 
     press(dashboard, "Stop")
     wait_for_state(dashboard, "stopped", timeout=120)
 
     deadline = time.monotonic() + 60
-    while time.monotonic() < deadline and gym_processes() > 0:
+    while time.monotonic() < deadline and gym_processes() > gyms_before:
         dashboard.wait_for_timeout(250)
-    assert gym_processes() == 0, "Stop must take the gym with it"
+    assert gym_processes() == gyms_before, "Stop must take the gym with it"
 
 
 def test_pause_and_resume_through_the_buttons(dashboard):
@@ -213,12 +224,12 @@ def test_pause_and_resume_through_the_buttons(dashboard):
     wait_for_state(dashboard, "stopped", timeout=120)
 
 
-def test_pressing_start_twice_does_not_start_two_gyms(dashboard):
+def test_pressing_start_twice_does_not_start_two_gyms(dashboard, gyms_before):
     """The reactive-rerun hazard, exercised the way a user would hit it."""
     press(dashboard, "Start")
     wait_for_state(dashboard, "running", timeout=120)
     running = gym_processes()
-    assert running >= 1
+    assert running > gyms_before
 
     press(dashboard, "Start")
     dashboard.wait_for_timeout(3_000)
@@ -261,11 +272,11 @@ def test_saving_writes_a_checkpoint(dashboard, tmp_path):
     wait_for_state(dashboard, "stopped", timeout=120)
 
 
-def test_a_reload_does_not_strand_the_gym(dashboard, server):
+def test_a_reload_does_not_strand_the_gym(dashboard, server, gyms_before):
     """Closing the tab and coming back must not leave a run orphaned."""
     press(dashboard, "Start")
     wait_for_state(dashboard, "running", timeout=120)
-    assert gym_processes() >= 1
+    assert gym_processes() > gyms_before
 
     dashboard.reload()
     dashboard.wait_for_selector("h3", timeout=90_000)

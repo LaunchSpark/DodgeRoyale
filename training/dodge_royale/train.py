@@ -11,6 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from .history import history_path, read_history
 from .metrics import MetricsCollector
 from .policies import ARCHITECTURES, ROYALE_ARCHITECTURE
 from .protocol import GymError, ProtocolError
@@ -147,6 +148,16 @@ def main(argv: list[str] | None = None) -> int:
     print(f"saved {path}")
     for definition, reading in metrics.snapshot().rows():
         print(f"  {definition.label:<14} {reading}")
+
+    # Where the model's own past now lives. Printed because a history nobody
+    # can find is not a history.
+    episodes = read_history(history_path(path))
+    if episodes:
+        counts = sorted({record.enemies for record in episodes})
+        print(
+            f"  history        {len(episodes):,} episodes beside the checkpoint, "
+            f"enemy counts {counts}"
+        )
     return 0
 
 

@@ -19,6 +19,7 @@ whatever a checkpoint was saved with, so a resumed run would keep an old
 from __future__ import annotations
 
 import contextlib
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
@@ -27,6 +28,7 @@ import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 
+from .history import HistoryWriter, history_path, read_history, run_history_path
 from .policies import ARCHITECTURES, ROYALE_ARCHITECTURE, Architecture, require_loadable
 from .protocol import GymError, Layout
 from .rewards import Rewards
@@ -252,14 +254,68 @@ class CheckpointWriter:
         suffix = "final" if step is None else f"{step:09d}"
         path = self.directory / f"{self.run_name}-{suffix}.zip"
         model.save(path)
+        self._snapshot_history(path)
         self.saved.append(path)
         return path
+
+    def _snapshot_history(self, checkpoint: Path) -> None:
+        """Copy the run's history beside the checkpoint being written.
+
+        A checkpoint should be able to answer "how did this model get here"
+        on its own, so it carries every episode finished up to the moment it
+        was saved rather than a pointer to a file that may move or be
+        overwritten by a later run of the same name.
+        """
+        live = run_history_path(self.directory, self.run_name)
+        if live.exists():
+            shutil.copyfile(live, history_path(checkpoint))
+
+    def history(self) -> Path:
+        """The run's live history file, appended to as episodes finish."""
+        return run_history_path(self.directory, self.run_name)
 
     def latest(self) -> Path | None:
         if not self.directory.exists():
             return None
         found = sorted(self.directory.glob(f"{self.run_name}-*.zip"))
         return found[-1] if found else None
+
+
+def inherit_history(writer: CheckpointWriter, resume: str | Path | None) -> int:
+    """Carry a resumed checkpoint's history into this run, once.
+
+    Without this, resuming under a new run name would start the history over
+    and the model would lose its past. Only when this run has no history yet:
+    a run resumed onto itself already has the records and must not double them.
+    """
+    if resume is None:
+        return 0
+    live = writer.history()
+    if live.exists():
+        return 0
+    ancestor = history_path(resume)
+    if not ancestor.exists():
+        return 0
+    live.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ancestor, live)
+    return len(read_history(live))
+
+
+def attach_history(
+    callback: BaseCallback | None, episodes: "HistoryWriter", config: SessionConfig
+) -> None:
+    """Give a metrics callback somewhere to record episodes.
+
+    Done here rather than at construction so a caller can hand `train` an
+    ordinary collector and still get a history: the run owns the file, and the
+    conditions each episode was played under are the run's configuration.
+    """
+    from .metrics import MetricsCollector
+
+    if isinstance(callback, MetricsCollector) and callback.history is None:
+        callback.history = episodes
+        callback.enemies = config.enemies
+        callback.hold_frames = config.hold_frames
 
 
 def train(
@@ -274,9 +330,13 @@ def train(
     including a failed build and an interrupt.
     """
     config.validate()
-    with session(config) as env:
+    writer = CheckpointWriter.for_config(config)
+    inherited = inherit_history(writer, resume)
+    with session(config) as env, HistoryWriter(writer.history()) as episodes:
+        if inherited:
+            print(f"continuing a history of {inherited} episodes")
         model = build_model(config, env, resume=resume)
-        writer = CheckpointWriter.for_config(config)
+        attach_history(callback, episodes, config)
         try:
             model.learn(total_timesteps=config.total_timesteps, callback=callback)
         except KeyboardInterrupt:

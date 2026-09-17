@@ -32,7 +32,15 @@ from typing import Any
 from stable_baselines3.common.callbacks import BaseCallback
 
 from .metrics import MetricsCollector, Snapshot
-from .training import CheckpointWriter, SessionConfig, build_model, session
+from .history import HistoryWriter
+from .training import (
+    CheckpointWriter,
+    SessionConfig,
+    attach_history,
+    build_model,
+    inherit_history,
+    session,
+)
 
 __all__ = [
     "TrainingWorker",
@@ -158,6 +166,7 @@ class TrainingWorker:
         self._last_publish = 0.0
 
         self._collector = MetricsCollector()
+        self._inherited_episodes = 0
         self._model: Any = None
         self._writer = CheckpointWriter.for_config(config)
 
@@ -292,7 +301,12 @@ class TrainingWorker:
             # `session` closes the gym on every exit from this block, which is
             # what makes a failure here cost a message rather than a stray
             # child process.
-            with session(self.config) as env:
+            inherited = inherit_history(self._writer, self.resume)
+            with session(self.config) as env, HistoryWriter(
+                self._writer.history()
+            ) as episodes:
+                attach_history(self._collector, episodes, self.config)
+                self._inherited_episodes = inherited
                 self._model = build_model(self.config, env, resume=self.resume)
                 self._set_state(WorkerState.RUNNING)
                 self._publish(force=True)

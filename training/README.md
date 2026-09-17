@@ -196,6 +196,35 @@ any training tensors.
 `cargo bench --locked --no-default-features --bench gym_throughput`, from the
 repository root, splits the Rust side into simulation, encoding and transfer.
 
+## Training history
+
+Every finished episode is appended to `<checkpoint-dir>/<run-name>.history.jsonl`
+as it happens, and copied beside each checkpoint as
+`<checkpoint>.history.jsonl`, so a model carries its whole past rather than
+only the rolling averages a run prints while it goes.
+
+Each record holds the survival time **and the enemy count it was played
+against**, because those only mean something together: three seconds against
+twelve enemies is not three seconds against a hundred, and the count can change
+between runs. It also records the timestep the episode ended on, its seed, the
+prediction hold, the reward, the enemy-on-enemy kills, and whether the player
+died or the clock ran out — a timeout is a censored survival time, not a longer
+one.
+
+```python
+from dodge_royale.history import read_history
+from collections import Counter
+
+episodes = read_history("checkpoints/royale-final.history.jsonl")
+print(len(episodes), Counter(e.enemies for e in episodes))
+print(max(e.seconds for e in episodes))
+```
+
+Resuming continues the history rather than starting a new one: a resumed
+checkpoint's records are inherited when the new run has none of its own. JSON
+Lines, flushed per episode, so a run that is killed keeps everything it
+actually finished.
+
 ## The dashboard
 
 A [marimo](https://marimo.io/) notebook over a live training session: start,
@@ -250,6 +279,7 @@ training/
     telemetry.py          # Training events and duration reporting  [done]
     training.py           # PPO session and process lifecycle  [done]
     train.py              # CLI entry point  [done]
+    history.py            # Per-episode training history  [done]
     metrics.py            # Metric definitions shared by CLI and dashboard  [done]
     worker.py             # Background training thread and its controls  [done]
     dashboard.py          # marimo dashboard  [done]

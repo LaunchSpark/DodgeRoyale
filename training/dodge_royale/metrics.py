@@ -19,6 +19,7 @@ from typing import Any, Callable, Literal
 
 from stable_baselines3.common.callbacks import BaseCallback
 
+from .history import EpisodeRecord, HistoryWriter
 from .telemetry import FRAMES_PER_SECOND
 
 __all__ = ["METRICS", "MetricDefinition", "MetricsCollector", "Snapshot"]
@@ -221,9 +222,22 @@ class MetricsCollector(BaseCallback):
     logger carries the optimizer's numbers, and the clock carries throughput.
     """
 
-    def __init__(self, window: int = EPISODE_WINDOW, verbose: int = 0) -> None:
+    def __init__(
+        self,
+        window: int = EPISODE_WINDOW,
+        verbose: int = 0,
+        *,
+        history: "HistoryWriter | None" = None,
+        enemies: int = 0,
+        hold_frames: int = 0,
+    ) -> None:
         super().__init__(verbose)
         self.window = window
+        # Optional, because the metrics are useful without a history and the
+        # history is written only by a run that owns a file to write to.
+        self.history = history
+        self.enemies = enemies
+        self.hold_frames = hold_frames
         self._lengths: list[float] = []
         self._returns: list[float] = []
         self.episodes = 0
@@ -247,10 +261,24 @@ class MetricsCollector(BaseCallback):
         self.updates += 1
 
     def _on_step(self) -> bool:
-        for info in self.locals.get("infos", ()):
+        for index, info in enumerate(self.locals.get("infos", ())):
             summary = info.get("episode_summary")
             if summary is None:
                 continue
+            if self.history is not None:
+                # Written as it happens rather than at the end: a run that is
+                # stopped or killed keeps every episode it actually finished.
+                self.history.append(
+                    EpisodeRecord.from_summary(
+                        summary,
+                        timesteps=int(getattr(self._model(), "num_timesteps", 0) or 0),
+                        env=index,
+                        enemies=self.enemies,
+                        hold_frames=self.hold_frames,
+                        episode_seed=int(info.get("episode_seed", 0)),
+                        recorded_at=time.time(),
+                    )
+                )
             self.episodes += 1
             if summary.get("died"):
                 self.deaths += 1
