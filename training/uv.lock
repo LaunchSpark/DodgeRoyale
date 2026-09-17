@@ -577,6 +577,7 @@ train = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-playwright" },
 ]
@@ -598,6 +599,7 @@ provides-extras = ["train", "dashboard", "cpu", "cu126"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "psutil", specifier = ">=5.9" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-playwright", specifier = ">=0.5" },
 ]

@@ -69,6 +69,9 @@ dev = [
     # Drives the dashboard in a real browser. The notebook's controls only
     # work through marimo's reactive graph, which no in-process test reaches.
     "pytest-playwright>=0.5",
+    # Host memory for the benchmark. The Windows API route through ctypes is
+    # fiddly enough to be worth not maintaining.
+    "psutil>=5.9",
 ]
 
 [tool.setuptools.packages.find]

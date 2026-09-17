@@ -25,6 +25,7 @@ like a training problem rather than a decoding one.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import platform
@@ -89,6 +90,10 @@ _ERROR_MESSAGE_CAP: Final = 1024
 
 # Lines of the child's stderr kept for diagnostics.
 _STDERR_LINES: Final = 200
+
+#: Read buffer for the gym's stdout. One megabyte holds a whole 8-env batch
+#: and a useful slice of a 64-env one, and costs a megabyte.
+READ_BUFFER_BYTES: Final = 1024 * 1024
 
 
 class ProtocolError(Exception):
@@ -687,6 +692,18 @@ class GymClient:
             shell=False,
             bufsize=0,
         )
+        # Read through a buffer, write without one.
+        #
+        # A raw pipe read returns only what has arrived, so a 7 MB batch at 64
+        # envs becomes thousands of small reads: measured at 545 ms a step and
+        # 13 MiB/s, against 45 ms and 154 MiB/s once buffered -- and the
+        # penalty grows with the batch, so it barely shows at 8 envs. Requests
+        # stay unbuffered, because a request the server never sees is a
+        # deadlock and they are far too small for buffering to pay.
+        if self._process.stdout is not None:
+            self._process.stdout = io.BufferedReader(
+                self._process.stdout, READ_BUFFER_BYTES
+            )
         self._start_drain()
 
         try:
