@@ -78,7 +78,7 @@ class Environment:
     diff_path: str | None = None
 
     @classmethod
-    def capture(cls) -> "Environment":
+    def capture(cls, output_paths: tuple[Path, ...] = ()) -> "Environment":
         def run(*command: str) -> str:
             try:
                 return subprocess.run(
@@ -93,8 +93,14 @@ class Environment:
         # Porcelain is two status columns, a space, then the path. Splitting
         # on whitespace keeps the path whole where a fixed slice ate a
         # character of it.
+        outputs = {
+            path.resolve().relative_to(root).as_posix()
+            for path in output_paths
+            if path.resolve().is_relative_to(root)
+        }
         changed = tuple(
-            line[2:].strip() for line in status.splitlines() if line.strip()
+            path for line in status.splitlines() if line.strip()
+            if (path := line[2:].strip()) not in outputs
         )
         try:
             import psutil  # noqa: F401
@@ -115,7 +121,7 @@ class Environment:
 
         return cls(
             revision=revision or "unknown",
-            dirty=bool(status),
+            dirty=bool(changed),
             python=sys.version.split()[0],
             torch=torch.__version__,
             cuda_available=torch.cuda.is_available(),
@@ -131,7 +137,7 @@ class Environment:
             dirty_files=changed,
         )
 
-    def preserve_diff(self, beside: Path) -> None:
+    def preserve_diff(self, beside: Path, output_paths: tuple[Path, ...] = ()) -> None:
         """Write the working-tree diff next to the results, and hash it.
 
         A number measured on a dirty tree is not reproducible from its
@@ -144,8 +150,14 @@ class Environment:
         import subprocess as sub
 
         root = Path(__file__).resolve().parent.parent.parent
+        outputs = [
+            path.resolve().relative_to(root).as_posix()
+            for path in output_paths
+            if path.resolve().is_relative_to(root)
+        ]
         diff = sub.run(
-            ["git", "-C", str(root), "diff", "HEAD"],
+            ["git", "-C", str(root), "diff", "HEAD", "--", ".",
+             *(f":(exclude){path}" for path in outputs)],
             capture_output=True, text=True, timeout=120,
         ).stdout
         if not diff.strip():
@@ -155,7 +167,8 @@ class Environment:
             object.__setattr__(self, "dirty", False)
             return
         path = beside.with_suffix(".diff")
-        path.write_text(diff, encoding="utf-8")
+        # Text mode rewrites LF to CRLF on Windows; hash the bytes we store.
+        path.write_bytes(diff.encode("utf-8"))
         self.diff_path = path.name
         self.diff_sha256 = hashlib.sha256(diff.encode("utf-8")).hexdigest()
 
@@ -632,7 +645,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)
 
-    environment = Environment.capture()
+    output_paths = tuple(path for path in (args.out, args.json) if path is not None)
+    if args.out is not None:
+        output_paths += (args.out.with_suffix(".diff"),)
+    environment = Environment.capture(output_paths)
     print(f"revision {environment.revision[:12]}"
           + (" (dirty)" if environment.dirty else ""), file=sys.stderr)
 
@@ -658,7 +674,7 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     if args.out:
-        environment.preserve_diff(args.out)
+        environment.preserve_diff(args.out, output_paths)
     text = report(environment, sizes, baselines)
     if args.out:
         args.out.write_text(text + "\n", encoding="utf-8")
