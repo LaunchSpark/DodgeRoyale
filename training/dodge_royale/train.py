@@ -11,12 +11,12 @@ import argparse
 import sys
 from pathlib import Path
 
+from .metrics import MetricsCollector
 from .policies import ARCHITECTURES, ROYALE_ARCHITECTURE
 from .protocol import GymError, ProtocolError
 from .training import (
     DEFAULTS,
     CheckpointWriter,
-    EpisodeRecorder,
     SessionConfig,
     check_env,
     describe,
@@ -136,20 +136,17 @@ def main(argv: list[str] | None = None) -> int:
                 print("\nthe batch resets and steps")
             return 0
 
-        recorder = EpisodeRecorder()
-        path = train(config, resume=resume, callback=recorder)
+        # The same collector the dashboard reads, so a metric added for a
+        # chart is reported here too and neither can define one differently.
+        metrics = MetricsCollector()
+        path = train(config, resume=resume, callback=metrics)
     except (GymError, ProtocolError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
     print(f"saved {path}")
-    if recorder.episodes:
-        print(
-            f"{len(recorder.episodes)} episodes, "
-            f"{recorder.log.total_seconds:.1f}s survived, "
-            f"{recorder.log.deaths} deaths, "
-            f"{recorder.log.enemies_destroyed} enemies destroyed"
-        )
+    for definition, reading in metrics.snapshot().rows():
+        print(f"  {definition.label:<14} {reading}")
     return 0
 
 

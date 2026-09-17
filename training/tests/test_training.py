@@ -15,12 +15,11 @@ from dodge_royale import training as training_module
 from dodge_royale.policies import ARCHITECTURES, ROYALE_ARCHITECTURE
 from dodge_royale.protocol import GymError, Layout, ProtocolError, ResetBatch, StepBatch, Transition
 from dodge_royale.rewards import Rewards
-from dodge_royale.telemetry import EpisodeLog
+from dodge_royale.metrics import MetricsCollector
 from dodge_royale.train import build_parser, config_from_args, main
 from dodge_royale.training import (
     DEFAULTS,
     CheckpointWriter,
-    EpisodeRecorder,
     SessionConfig,
     build_model,
     check_env,
@@ -371,9 +370,10 @@ def test_zero_enemies_is_allowed_for_a_controlled_run():
 # --- telemetry -----------------------------------------------------------
 
 
-def test_the_recorder_collects_finished_episodes_not_auto_resets():
-    log = EpisodeLog()
-    recorder = EpisodeRecorder(log)
+def test_the_collector_counts_finished_episodes_not_auto_resets():
+    """One collector serves the CLI and the dashboard, so this is the same
+    code path both report from."""
+    recorder = MetricsCollector()
     recorder.locals = {
         "infos": [
             {"frames": 12},  # still running: no summary, nothing recorded
@@ -390,10 +390,11 @@ def test_the_recorder_collects_finished_episodes_not_auto_resets():
         ]
     }
     assert recorder._on_step() is True
-    assert len(recorder.episodes) == 1
-    assert log.total_seconds == pytest.approx(1.0)
-    assert log.deaths == 1
-    assert log.enemies_destroyed == 3
+    snapshot = recorder.snapshot()
+    assert snapshot.episodes == 1
+    assert snapshot.survival_seconds == pytest.approx(1.0)
+    assert snapshot.deaths == 1
+    assert snapshot.timeouts == 0
 
 
 # --- checkpoints ---------------------------------------------------------

@@ -8,9 +8,10 @@ setup needs both halves of the repository.
 **Implemented so far:** `protocol.py` (the protocol-v1 client), `vec_env.py`
 (`RoyaleVecEnv`), `rewards.py`, `telemetry.py`, `velocity.py` (the extractor),
 `policies.py`, `training.py` (the PPO session) and `train.py` (the CLI), with
-their tests. `dashboard.py` is still pending, from Task 11 of the
+their tests, plus `metrics.py`, `worker.py` and `dashboard.py` (the marimo
+dashboard). That completes Tasks 8-11 of the
 [implementation plan](../docs/superpowers/plans/2026-09-15-velocity-flow-royale-implementation.md);
-marimo is already installed for it.
+Tasks 12-13 are the cross-language acceptance and regression gates.
 
 ## Setting up
 
@@ -37,9 +38,9 @@ and which drags in graphics libraries. This writes
 `target/release/dodge-royale` (`.exe` on Windows), which is where the client
 looks for it.
 
-The first build takes a few minutes. A debug build works too, but it is
-roughly an order of magnitude slower per simulated frame, so the wait pays for
-itself in the first training run.
+The first build takes a few minutes. A debug build works for smoke checks,
+but train against the release one: `benches/gym_throughput.rs` is written
+against release, and the debug binary has never been benchmarked here.
 
 ### 3. Create the Python environment
 
@@ -48,25 +49,40 @@ From **this** directory, pick the line that matches what you are doing:
 ```sh
 cd training
 
-uv sync                                      # protocol client + pytest only
-uv sync --extra train                        # add the learner (SB3, Gymnasium, torch)
 uv sync --extra dashboard --extra cu126      # everything, PyTorch with CUDA
 uv sync --extra dashboard --extra cpu        # everything, PyTorch without CUDA
+uv sync --extra train                        # learner and tests, no dashboard
+uv sync                                      # protocol client only (see below)
 ```
 
-Any of these creates `training/.venv`, installs the exact versions pinned in
-`uv.lock`, and installs `dodge_royale` itself in editable mode. Two
-collaborators running the same line get the same environment.
+Pick one of the first two unless you know you want less. Any of them creates
+`training/.venv`, installs the exact versions pinned in `uv.lock`, and installs
+`dodge_royale` itself in editable mode. Two collaborators running the same line
+get the same environment.
 
-The first line is deliberately small. `protocol.py` knows nothing about SB3,
-Gymnasium or PyTorch, so a change to the wire format can be tested without a
-multi-gigabyte download.
+**`uv sync` on its own is not a smaller version of the others.** It installs
+the protocol client and pytest and nothing else, because `protocol.py` knows
+nothing about SB3, Gymnasium or PyTorch and a wire-format change should be
+testable without a multi-gigabyte download. What it does *not* give you is the
+rest of the suite: `test_vec_env.py`, `test_velocity.py` and `test_training.py`
+import the learner, so collecting the whole `tests/` directory fails at import.
+Run the subset that matches the install:
+
+```sh
+uv run pytest tests/test_protocol.py tests/test_lifecycle.py   # 67, or 64 with no binary
+```
+
+uv syncs make the environment match the flags you passed, so running plain
+`uv sync` in a checkout that already has the learner **uninstalls it**, torch
+included. Pass the same extras every time, or add them
+(`uv sync --extra dashboard --extra cu126`) rather than dropping them.
 
 **On Windows, put the cache on the same drive as the checkout.** uv hardlinks
 from its cache into `.venv` when both are on one filesystem and copies when
-they are not, which for PyTorch is 2.4 GB copied on every sync. If `uv cache
-dir` prints a `C:` path and you work on another drive, set `UV_CACHE_DIR`
-alongside your projects once and installs become near-instant:
+they are not. A sync that changes nothing does no work either way, but any
+sync that installs or swaps PyTorch copies it — 2.4 GB, about a minute
+here. If `uv cache dir` prints a `C:` path and you work on another drive, set
+`UV_CACHE_DIR` alongside your projects once:
 
 ```sh
 setx UV_CACHE_DIR D:\.uv-cache
@@ -78,16 +94,17 @@ setx UV_CACHE_DIR D:\.uv-cache
 > than silently picking one. Name the extras you want instead.
 
 **Which torch build?** If you have an NVIDIA GPU, use `cu126`. Without the
-extras, PyPI decides, and on Windows PyPI ships a CPU-only wheel — training
-still runs, about an order of magnitude slower. Check what you got:
+extras PyPI decides, and on Windows PyPI ships a CPU-only wheel, so the card
+would sit idle. Training runs either way. Check what you got:
 
 ```sh
 uv run python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 ```
 
 `2.14.0+cu126 True` is a GPU install. `2.14.0+cpu False` or `2.14.0 False` is
-not. If `cu126` prints `False`, the graphics driver is the problem rather than
-this project.
+not. `cu126` with `False` means the build is right but torch cannot reach a
+card — driver, toolkit, or no NVIDIA GPU present. `--device cpu` forces CPU
+whatever is installed.
 
 ### 4. Check it worked
 
@@ -154,12 +171,34 @@ controls that apply to Royale; `--rewards` points at a different file.
 
 ## The dashboard
 
-Not written yet. marimo is in the `dashboard` extra and installed, so when
-`dodge_royale/dashboard.py` arrives it will run with:
+A [marimo](https://marimo.io/) notebook over a live training session: start,
+pause, resume, save, stop, and the run's metrics and charts as it goes.
 
 ```sh
-uv run marimo edit dodge_royale/dashboard.py
+uv run marimo run  dodge_royale/dashboard.py --no-sandbox   # use it
+uv run marimo edit dodge_royale/dashboard.py --no-sandbox   # change it
+uv run python dodge_royale/dashboard.py                     # a short real run, no browser
 ```
+
+`--no-sandbox` because the notebook carries a PEP 723 header, and without the
+flag marimo offers to build a separate environment from it. The header is
+there so the notebook is self-describing and `marimo edit --sandbox` works;
+the project environment you already synced has everything.
+
+The last line is script mode. marimo runs every cell once with a small
+configuration, trains for a few hundred steps against a real gym, prints the
+metrics and exits -- the end-to-end smoke test for the dashboard, needing no
+browser.
+
+Training runs on a background thread so the page stays responsive. Only one
+run exists at a time: marimo re-runs a cell whenever its inputs change, so a
+cell that *created* a run would create another on every rerun, and the worker
+lives outside the notebook to prevent exactly that. Stopping, failing, closing
+the tab or killing the kernel all close the gym process.
+
+**Watch Agent is deliberately absent.** Watching the policy play needs the
+trained weights running inside the game, which is the in-game autopilot: its
+own spec, written after a policy trains.
 
 ## Layout
 
@@ -178,7 +217,9 @@ training/
     telemetry.py          # Training events and duration reporting  [done]
     training.py           # PPO session and process lifecycle  [done]
     train.py              # CLI entry point  [done]
-    dashboard.py          # marimo dashboard  [pending]
+    metrics.py            # Metric definitions shared by CLI and dashboard  [done]
+    worker.py             # Background training thread and its controls  [done]
+    dashboard.py          # marimo dashboard  [done]
   tests/                  # Unit tests and live integration tests
 ```
 

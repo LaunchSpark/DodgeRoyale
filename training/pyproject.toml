@@ -28,6 +28,10 @@ train = [
 dashboard = [
     "dodge-royale-training[train]",
     "marimo>=0.9",
+    # marimo renders charts but bundles no plotting stack, so the dashboard's
+    # survival and return charts need these explicitly.
+    "altair>=5.0",
+    "polars>=1.0",
 ]
 # Which PyTorch build to fetch. Exactly one of these, and never both: PyPI's
 # Windows wheel is CPU-only, so a GPU needs the build from PyTorch's own index.

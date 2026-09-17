@@ -30,12 +30,10 @@ from stable_baselines3.common.callbacks import BaseCallback
 from .policies import ARCHITECTURES, ROYALE_ARCHITECTURE, Architecture, require_loadable
 from .protocol import GymError, Layout
 from .rewards import Rewards
-from .telemetry import EpisodeLog
 from .vec_env import RoyaleVecEnv
 
 __all__ = [
     "DEFAULTS",
-    "EpisodeRecorder",
     "SessionConfig",
     "build_model",
     "check_env",
@@ -235,30 +233,6 @@ def build_model(
     # Before `env=` is passed, so a mismatch is a refusal rather than a run.
     require_loadable(path, env.layout)
     return PPO.load(path, env=env, **architecture.resume_kwargs(), **shared)
-
-
-class EpisodeRecorder(BaseCallback):
-    """Collect finished episodes from the infos Task 9 fills in.
-
-    Reads `episode_summary`, which describes the episode that *ended* rather
-    than the one that replaced it, so a chart of survival time is a chart of
-    episodes and not of auto-resets.
-    """
-
-    def __init__(self, log: EpisodeLog | None = None, verbose: int = 0) -> None:
-        super().__init__(verbose)
-        self.log = log or EpisodeLog()
-
-    def _on_step(self) -> bool:
-        for info in self.locals.get("infos", ()):
-            summary = info.get("episode_summary")
-            if summary is not None:
-                self.log.record(summary)
-        return True
-
-    @property
-    def episodes(self) -> list[dict[str, Any]]:
-        return self.log.episodes
 
 
 @dataclass

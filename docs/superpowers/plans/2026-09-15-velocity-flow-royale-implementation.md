@@ -1,8 +1,8 @@
 # VelocityFlow for DodgeRoyale implementation plan
 
 **Date:** 2026-09-15  
-**Status:** Tasks 1-7 implemented on `velocity-flow-royale`; graphical smoke check
-still outstanding. Tasks 8-13 pending. Ownership revised 2026-09-16; the task
+**Status:** Tasks 1-11 implemented on `velocity-flow-royale`; graphical smoke check
+still outstanding. Tasks 12-13 pending. Ownership revised 2026-09-16; the task
 checkboxes below are acceptance criteria, not an execution log.  
 **Design:** [VelocityFlow for DodgeRoyale](../specs/2026-09-15-velocity-flow-royale-design.md)
 
@@ -401,33 +401,35 @@ with identical obs_len fail. Port relevant numerical policy tests locally.
 `training/dodge_royale/dashboard.py`, `training/dodge_royale/training.py`, and
 local session/GUI tests including `training/tests/test_training.py`.
 
-- [ ] Provide `python -m dodge_royale.train` and
+- [x] Provide `python -m dodge_royale.train` and
   `python -m dodge_royale.dashboard`. Both run Royale; no `--game` switch or
   PICO-8 environment factory. Default to 8 envs, 1024 rollout
   steps, 100 enemies, 3600 max frames, hold 24, and two Rust worker threads.
   Expose overrides in the CLI; do not reinterpret action-repeat as hold frames.
-- [ ] Centralize env construction and use RoyaleVecEnv directly in
+- [x] Centralize env construction and use RoyaleVecEnv directly in
   both entry points. Route --check-env to a VecEnv smoke check for Royale,
   rather than passing it to Gymnasium's scalar-env checker.
-- [ ] Register GPU architecture selection and per-architecture hyperparameters:
+- [x] Register GPU architecture selection and per-architecture hyperparameters:
   gamma=0.99**0.25, gae_lambda=0.95**0.25, with the remaining starting settings
   inherited explicitly from v2. Apply them on new models and checkpoint loads,
   using one local configuration for both entry points.
-- [ ] Bound Royale minibatches independently of total rollout samples. Start
+- [x] Bound Royale minibatches independently of total rollout samples. Start
   with a cap of 128, allow an explicit override, and choose a valid size for
   small smoke rollouts. Record the measured memory limit; a cap is not a
   guarantee against OOM on every device.
-- [ ] Thread the live Layout through new-model creation. On reload, compare
+- [x] Thread the live Layout through new-model creation. On reload, compare
   the stored Layout before attaching the env. Changing enemy count/max frames
   can restart envs without changing model shape; changing hold duration must
   follow the spec's compatibility check, not silently reinterpret a checkpoint.
-- [ ] Make Game Config show only its supported knobs, disable Watch
+- [x] Make Game Config show only its supported knobs, disable Watch
   Agent with the stated autopilot explanation, and use the frame-count infos
   from Task 9 for the local survival charts. Audit field-overlay/diagnostic
   paths for hard-coded PICO-8 observation sizes before enabling them.
-- [ ] Route staged config, stop/restart, initialization failure, and checkpoint
+- [x] Route staged config, stop/restart, initialization failure, and checkpoint
   failure through cleanup that closes the Rust process. Port checkpoint save
   behavior and relevant lifecycle tests without cart migration machinery.
+
+**Status:** complete. `training.py` and `train.py` landed in f1edaa8; `metrics.py`, `worker.py` and `dashboard.py` here. Verified against the real binary: `--dry-run`, `--check-env`, a full train-and-save, `--resume-latest`, the notebook in script mode, and `marimo run` serving HTTP 200 with no gym started until Start is pressed.
 
 **Acceptance:** mocked CLI/session/GUI tests cover Royale defaults, invalid
 pairings, initial creation, reload, config restart, and child cleanup. Verify
