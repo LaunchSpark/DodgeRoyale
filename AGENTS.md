@@ -143,6 +143,29 @@ terminates, and kills, reaping at every stage. The binary is found through
 working directory; an override that is set but wrong is an error rather than a
 silent fall back to a different build.
 
+The dashboard is a marimo notebook, `dodge_royale/dashboard.py`. marimo re-runs
+a cell whenever anything it reads changes, so no cell may own a training run: one
+that created a worker would create another on every rerun, each with its own gym.
+The single worker lives in `worker.py` behind a module-level handle reached
+through `active_worker()`, and `start_worker` refuses while a run is active.
+Training runs on a background thread and cells read frozen `WorkerStatus`
+snapshots taken under a lock, with bounded history, so a cell never reads state
+the trainer is mutating and a long run cannot grow the page without limit.
+Pause, stop and save all act inside PPO's own loop through a callback, because
+that is the only point PPO hands control back; saving in particular must happen
+on the training thread, since a save from elsewhere would read parameters
+mid-update. Stopping, failing, a rerun and interpreter exit all close the gym.
+
+Metrics are defined once, in `metrics.py`, and both the CLI and the dashboard
+report from the same collector. A metric is a `MetricDefinition` in `METRICS`
+plus a field on `Snapshot`; the dashboard renders whatever the registry lists,
+so neither entry point can define one the other lacks or means differently.
+Optimizer metrics read as absent rather than zero before the first update,
+because zero would chart as a real loss. The device is read off a policy
+parameter rather than from what was requested, so a run that fell back to CPU
+says so. Watch Agent stays absent until in-game inference exists; it is the
+autopilot spec, written after a policy trains.
+
 DodgeAI remains independent. Adapt needed policy/training code locally with source
 revision/path attribution and applicable notices; do not modify or import DodgeAI,
 add it as a dependency, or require sibling checkouts, symlinks, cartridges, or old
