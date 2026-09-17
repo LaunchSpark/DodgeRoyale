@@ -5,7 +5,7 @@ Rust toolchain, a build, or a running gym. Nothing here is generated at test
 time: `manifest.json` describes files that are already in the repository, and
 both languages read the same bytes.
 
-Regenerate after an intentional protocol or encoder change:
+Regenerate after an intentional protocol, encoder, or simulation change:
 
 ```sh
 cargo run --locked --no-default-features --example gym_fixtures
@@ -22,6 +22,7 @@ see [`examples/gym_fixtures.rs`](../../../examples/gym_fixtures.rs).
 | `reset-frame-zero.bin` | `0x83` | The unasked frame zero that follows the handshake. |
 | `step-running.bin` | `0x82` | Two ordinary transitions: no terminal section, no replacement seed. |
 | `step-auto-reset.bin` | `0x82` | Both envs hit the frame budget: terminal observations, replacement seeds, `truncated` set. |
+| `step-death.bin` | `0x82` | One env dies while the other continues; only the dead env has a terminal observation and replacement seed. |
 | `scenes.bin` | `0x82` | Three hand-placed arenas that pin the encoder's axes, signs and wrapping. |
 
 The first four come from a real `ArenaBatch` at root seed 7, so they are
@@ -38,6 +39,11 @@ or a hazard straddling the seam on any chosen frame:
 * **env 2** — hazards over both wrap seams. Displacement uses
   `torus::wrapped_delta`, so a hazard a few pixels past the edge is a few
   pixels away. A decoder that subtracts positions sees an empty window.
+
+The death fixture uses root seed 31 with 100 enemies, including one initial
+window-edge enemy. It remains a mixed batch. These captures describe the simulation
+revision that emitted them; gameplay changes can change their values without
+changing protocol v1.
 
 ## Comparing values
 

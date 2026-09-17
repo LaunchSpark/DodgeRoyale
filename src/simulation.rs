@@ -13,7 +13,9 @@ use std::time::Duration;
 
 use crate::collision::Collider;
 use crate::enemy::{Dying, Enemy, EnemyPlugin, EnemySet, EnemyTarget, EnemyWorld, Velocity2d};
-use crate::enemy_population::{EnemyPopulation, EnemyPopulationPlugin, replenish_enemies};
+use crate::enemy_population::{
+    EnemyPopulation, EnemyPopulationPlugin, WindowEdgeSpawn, replenish_enemies,
+};
 use crate::enemy_types::{
     Defeated, EnemyKind, KamikazeBlast, KamikazeSettings, PlayerHit, ReferenceEnemyPlugin,
 };
@@ -98,6 +100,7 @@ impl Plugin for SimulationPlugin {
 pub fn spawn_player_body(translation: Vec3) -> impl Bundle {
     (
         Player,
+        WindowEdgeSpawn(128.0 * crate::scale::PIXEL),
         EnemyTarget,
         Collider::rectangle(Vec2::splat(PLAYER_HALF_SIZE)),
         Velocity2d::default(),

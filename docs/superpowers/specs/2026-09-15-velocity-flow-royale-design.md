@@ -94,6 +94,18 @@ themes, the config screen.
   frame.
 * Wrapping comes from each archetype's `BoundaryMode::Wrap` plus the
   `EnemyWorld` half extents; a test asserts both.
+* **Opening enemy (2026-09-16 gameplay change).** One initial enemy is placed
+  on the perimeter of the player's 256-reference-pixel observation window:
+  128 pixels (800 world units) along one axis, random position along the other.
+  It is part of the configured population, including in single-enemy episodes;
+  zero-enemy episodes remain empty. Candidates are sampled with the spawn queue's
+  seeded RNG, wrap with the player, remain within the selected type's detection
+  range, and reject actor overlaps. This one spawn bypasses the normal distant
+  placement exclusion. Failed requests retain their type and retry within existing
+  budgets. Replacements follow ordinary placement. Graphical and headless games
+  use the same initializer; frame zero has zero velocities and no elapsed gameplay.
+  There is no velocity burst or forced steering. Seeded trajectories change with
+  the rule; observation layout and protocol v1 do not.
 
 ### 3.3 `ArenaView`
 

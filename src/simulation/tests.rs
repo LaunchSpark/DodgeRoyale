@@ -251,6 +251,47 @@ fn frame_zero_has_the_full_population_and_nothing_has_moved() {
 }
 
 #[test]
+fn exactly_one_initial_enemy_starts_on_the_observation_window_edge() {
+    let half = crate::observation::WINDOW_HALF * crate::scale::PIXEL;
+    let mut starts = Vec::new();
+    for seed in 0..8 {
+        let mut arena = HeadlessArena::new(ArenaConfig { seed, ..default() }).expect("arena fills");
+        let view = arena.view();
+        let edge: Vec<_> = view
+            .enemies
+            .iter()
+            .filter(|enemy| (enemy.position.abs().max_element() - half).abs() < 0.001)
+            .collect();
+        assert_eq!(edge.len(), 1, "exactly one opener at seed {seed}");
+        let enemy = edge.first().expect("edge enemy");
+        starts.push(enemy.position);
+        let state = arena
+            .world_mut()
+            .get::<crate::enemy::EnemyState>(enemy.entity)
+            .expect("state");
+        assert!(
+            state.target.is_none(),
+            "no forced pursuit before a real frame"
+        );
+        arena.step().expect("first frame");
+        let player = arena.player();
+        let state = arena
+            .world_mut()
+            .get::<crate::enemy::EnemyState>(enemy.entity)
+            .expect("state");
+        assert_eq!(
+            state.target,
+            Some(player),
+            "normal detection acquires the player"
+        );
+    }
+    assert!(
+        starts.windows(2).any(|pair| pair.first() != pair.last()),
+        "placement varies by seed"
+    );
+}
+
+#[test]
 fn a_population_that_does_not_fit_the_pass_budget_is_an_error() {
     // One pass places at most the population controller's per-update budget,
     // so asking for far more than that in a single pass cannot succeed.

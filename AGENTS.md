@@ -228,6 +228,20 @@ are sufficient; add spatial indexing if measured counts require it.
 
 ## Enemy population and spawn queue
 
+A fresh player carries `WindowEdgeSpawn(800.0)`, requesting one enemy whose centre
+lies on the perimeter of its 256-reference-pixel observation window (128 pixels
+times 6.25 world units on one axis). The normal population queue places this
+enemy first, using its seeded RNG and weighted archetype selection. It counts
+toward the population target. All enemies start at rest and use normal steering.
+The opener deliberately bypasses the usual detection-range exclusion: candidate
+edge points must be inside its detection range and must not overlap any actor,
+including through wrap seams. Failed placement retains the request and selected
+type under the existing attempt/pass budgets. Success removes the player's marker,
+so replacements use normal distant placement; a fresh player requests a new opener.
+Zero-enemy episodes spawn nothing. The same placement runs in the graphical game
+and headless spawn-only initialization. This changes seeded trajectories but does
+not change the observation layout or protocol v1.
+
 `src/enemy_population.rs` provides an optional renderer-independent
 `EnemyPopulationPlugin`. The game's default population target is 100, with weighted
 Normal and Kamikaze definitions in `EnemyPopulation.types`. Each `EnemyArchetype`

@@ -13,6 +13,11 @@ first, then finds a random position outside that type's player detection range.
 Enemies that collide with each other both die and are replaced. Enemy or blast
 contact defeats the player and returns to the menu.
 
+One enemy in each starting population spawns at a random, non-overlapping point
+on the edge of the player's 256-pixel observation window, within detection range
+so it can start chasing normally. This applies to graphical and headless games;
+replacement enemies use the usual distant placement. All enemies start at rest.
+
 ## AI training
 
 The VelocityFlow trainer lives in this repository under
