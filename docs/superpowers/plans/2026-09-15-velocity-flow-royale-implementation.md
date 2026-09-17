@@ -1,9 +1,9 @@
 # VelocityFlow for DodgeRoyale implementation plan
 
 **Date:** 2026-09-15  
-**Status:** Tasks 1-13 implemented on `velocity-flow-royale`; the manual
-graphical check is the one item still outstanding. Ownership revised 2026-09-16; the task
-checkboxes below are acceptance criteria, not an execution log.  
+**Status:** Tasks 1-13 complete on `velocity-flow-royale`, including the native
+graphical smoke check. Ownership revised 2026-09-16; the task checkboxes below
+are acceptance criteria, not an execution log.
 **Design:** [VelocityFlow for DodgeRoyale](../specs/2026-09-15-velocity-flow-royale-design.md)
 
 ## Outcome and boundaries
@@ -457,7 +457,7 @@ subprocess tests and numeric fixtures as needed.
 - [x] Check both Rust feature configurations and the WASM library build. Manually
   verify graphical controls and screen lifecycle after the extraction.
 
-**Status:** complete except the manual graphical check, which is recorded as unverified below.
+**Status:** complete, including the native graphical smoke check recorded below.
 
 Run the required Rust gates from the Rust repository:
 
@@ -521,9 +521,11 @@ relevant task-runner/CI commands.
 
 ## Completion checklist
 
-- [ ] Shared movement and scheduling preserve playable graphical behavior.
-      **Not verified.** Needs a human at a window; automated coverage
-      reaches the headless simulation only.
+- [x] Shared movement and scheduling preserve playable graphical behavior.
+      Native window smoke check on 2026-09-17: keyboard input moved the player,
+      the camera followed and trail rendered, a hit returned to the menu, and
+      Enter started a fresh game. Seam wrapping passed the existing simulation
+      tests; live attempts ended in collisions before reaching the seam.
 - [x] Frame-zero initialization is seeded, bounded, and contains no hidden play.
 - [x] The first public step advances one simulation frame; completed episodes
   remain frozen until reset.

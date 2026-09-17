@@ -1,7 +1,7 @@
 {
   "environment": {
-    "revision": "b7facf78f5c7dd42f58d0bf7f4368944362b78e4",
-    "dirty": true,
+    "revision": "39c665c683f02445ff67f2d3986297bba56187a1",
+    "dirty": false,
     "python": "3.12.2",
     "torch": "2.14.0+cu126",
     "cuda_available": true,
@@ -11,7 +11,10 @@
     "ram_gib": 15.9,
     "os": "Windows 10",
     "rustc": "rustc 1.95.0 (59807616e 2026-04-14)",
-    "binary": "D:\\projects\\DodgeRoyale-vfr\\target\\release\\dodge-royale.exe"
+    "binary": "D:\\projects\\DodgeRoyale-vfr\\target\\release\\dodge-royale.exe",
+    "dirty_files": [],
+    "diff_sha256": null,
+    "diff_path": null
   },
   "sizes": [
     {
@@ -24,32 +27,57 @@
       "stages": [
         {
           "name": "round trip (simulate + encode + transport)",
-          "seconds_per_batch": 0.0053194624997559,
-          "env_steps_per_second": 1503.9113444952577,
+          "seconds_per_batch": 0.006754199999704724,
+          "env_steps_per_second": 1184.4481952488436,
           "note": "one STEP answered by the gym; the Rust benchmark splits it further"
         },
         {
           "name": "inference (one batch forward)",
-          "seconds_per_batch": 0.004356294998433441,
-          "env_steps_per_second": 1836.4229242686422,
+          "seconds_per_batch": 0.00466976499883458,
+          "env_steps_per_second": 1713.1483066056937,
           "note": ""
         },
         {
           "name": "optimization (one PPO update)",
-          "seconds_per_batch": 0.08681430004071444,
-          "env_steps_per_second": 1474.4114729943126,
+          "seconds_per_batch": 0.09178699995391071,
+          "env_steps_per_second": 1394.5329955687955,
           "note": "16 steps x 8 envs, minibatch 128, 1 epoch"
         },
         {
+          "name": "  of which: parsing the reply",
+          "seconds_per_batch": 0.000126755001838319,
+          "env_steps_per_second": 63113.88019389022,
+          "note": "part of the round trip, decoded from memory so no waiting is counted"
+        },
+        {
           "name": "end to end (learn)",
-          "seconds_per_batch": 0.017706200000247918,
-          "env_steps_per_second": 451.81913679321286,
-          "note": "256 env steps over 32 batch steps and 2 updates; 0.57 s total"
+          "seconds_per_batch": 0.019425696875259746,
+          "env_steps_per_second": 411.8256375239063,
+          "note": "256 env steps over 32 batch steps and 2 updates; 0.62 s total"
         }
       ],
+      "cycle": [
+        {
+          "name": "collection: round trip",
+          "seconds": 0.10806719999527559,
+          "share": 0.39358643276608457
+        },
+        {
+          "name": "collection: inference",
+          "seconds": 0.07471623998135328,
+          "share": 0.27212048026821417
+        },
+        {
+          "name": "optimization: one update",
+          "seconds": 0.09178699995391071,
+          "share": 0.3342930869657012
+        }
+      ],
+      "cycle_seconds": 0.2745704399305396,
+      "cycle_env_steps": 128,
       "rollout_observation_bytes": 14736384,
       "full_rollout_observation_bytes": 943128576,
-      "peak_host_mib": 1585.44140625,
+      "peak_host_mib": 1588.625,
       "peak_device_mib": 654.3388671875
     },
     {
@@ -62,32 +90,57 @@
       "stages": [
         {
           "name": "round trip (simulate + encode + transport)",
-          "seconds_per_batch": 0.044724456249241484,
-          "env_steps_per_second": 1430.984418085249,
+          "seconds_per_batch": 0.04795773750083754,
+          "env_steps_per_second": 1334.508326187871,
           "note": "one STEP answered by the gym; the Rust benchmark splits it further"
         },
         {
           "name": "inference (one batch forward)",
-          "seconds_per_batch": 0.01144858000043314,
-          "env_steps_per_second": 5590.212934493069,
+          "seconds_per_batch": 0.012447914999211208,
+          "env_steps_per_second": 5141.42328285946,
           "note": ""
         },
         {
           "name": "optimization (one PPO update)",
-          "seconds_per_batch": 0.6291736000566743,
-          "env_steps_per_second": 1627.5317335434302,
+          "seconds_per_batch": 0.7130066999816336,
+          "env_steps_per_second": 1436.1716376948173,
           "note": "16 steps x 64 envs, minibatch 128, 1 epoch"
         },
         {
+          "name": "  of which: parsing the reply",
+          "seconds_per_batch": 0.0048524299985729154,
+          "env_steps_per_second": 13189.26806132643,
+          "note": "part of the round trip, decoded from memory so no waiting is counted"
+        },
+        {
           "name": "end to end (learn)",
-          "seconds_per_batch": 0.11048599687637761,
-          "env_steps_per_second": 579.2589270078214,
-          "note": "2048 env steps over 32 batch steps and 2 updates; 3.54 s total"
+          "seconds_per_batch": 0.11673236874958093,
+          "env_steps_per_second": 548.2626685773457,
+          "note": "2048 env steps over 32 batch steps and 2 updates; 3.74 s total"
         }
       ],
+      "cycle": [
+        {
+          "name": "collection: round trip",
+          "seconds": 0.7673238000134006,
+          "share": 0.4568771102649425
+        },
+        {
+          "name": "collection: inference",
+          "seconds": 0.19916663998737932,
+          "share": 0.11858706707262678
+        },
+        {
+          "name": "optimization: one update",
+          "seconds": 0.7130066999816336,
+          "share": 0.4245358226624308
+        }
+      ],
+      "cycle_seconds": 1.6794971399824135,
+      "cycle_env_steps": 1024,
       "rollout_observation_bytes": 117891072,
       "full_rollout_observation_bytes": 7545028608,
-      "peak_host_mib": 1824.75390625,
+      "peak_host_mib": 1828.8203125,
       "peak_device_mib": 669.2275390625
     }
   ],
