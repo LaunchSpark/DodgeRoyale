@@ -21,6 +21,45 @@ train = [
     "stable-baselines3>=2.3",
     "gymnasium>=0.29",
 ]
+# The dashboard is a marimo notebook over a live training session, so it needs
+# the learner as well as marimo itself. Declared as a dependency on this
+# project's own `train` extra rather than by repeating that list, so the two
+# cannot drift apart.
+dashboard = [
+    "dodge-royale-training[train]",
+    "marimo>=0.9",
+]
+# Which PyTorch build to fetch. Exactly one of these, and never both: PyPI's
+# Windows wheel is CPU-only, so a GPU needs the build from PyTorch's own index.
+# On Linux the PyPI wheel already carries CUDA, but naming it here keeps one
+# command working on both.
+cpu = ["torch>=2.2"]
+cu126 = ["torch>=2.2"]
+
+[tool.uv]
+# uv refuses to lock two extras that would resolve the same package to
+# different builds unless it is told they are alternatives.
+conflicts = [[{ extra = "cpu" }, { extra = "cu126" }]]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu126", extra = "cu126" },
+]
+
+[dependency-groups]
+# PEP 735. `uv sync` installs this by default, so a fresh checkout can run the
+# tests without anyone having to know which extra to ask for.
 dev = ["pytest>=8.0"]
 
 [tool.setuptools.packages.find]

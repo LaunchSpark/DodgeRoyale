@@ -15,13 +15,25 @@ contact defeats the player and returns to the menu.
 
 ## AI training
 
-The VelocityFlow trainer is planned as part of this repository under
+The VelocityFlow trainer lives in this repository under
 [`training/`](training/README.md), alongside the Rust simulation, observation
-encoder, and gym protocol. It will contain the Python client, policy, PPO CLI,
-and dashboard with their own dependencies and tests. DodgeAI remains independent;
-no sibling checkout will be required. Python is optional for building and playing
-the game. See the [implementation plan](docs/superpowers/plans/2026-09-15-velocity-flow-royale-implementation.md)
-for the remaining training work; the Python entry points are not implemented yet.
+encoder, and gym protocol. It is a uv project: the protocol client, policy, PPO
+session and CLI are implemented and tested; the marimo dashboard is still
+pending. DodgeAI remains independent, and no sibling checkout is required.
+
+Python is optional for building and playing the game. To train:
+
+```sh
+cargo build --release --no-default-features   # the gym binary the trainer drives
+cd training
+uv sync --extra dashboard --extra cu126       # or --extra cpu without an NVIDIA GPU
+uv run python -m dodge_royale.train --check-env
+```
+
+[`training/README.md`](training/README.md) has the full setup, including what to
+install first and how to point at a binary somewhere else. See the
+[implementation plan](docs/superpowers/plans/2026-09-15-velocity-flow-royale-implementation.md)
+for what remains.
 
 ## Building
 
