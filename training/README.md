@@ -207,6 +207,16 @@ uv run marimo edit dodge_royale/dashboard.py --no-sandbox   # change it
 uv run python dodge_royale/dashboard.py                     # a short real run, no browser
 ```
 
+To open the dashboard from the browser game's **AI dashboard** button, run the
+server without opening a tab first:
+
+```sh
+uv run marimo run dodge_royale/dashboard.py --no-sandbox --headless --host 127.0.0.1 --port 2718
+```
+
+The button then opens `http://127.0.0.1:2718/` in a new tab. The server must
+remain running while you use the dashboard.
+
 `--no-sandbox` because the notebook carries a PEP 723 header, and without the
 flag marimo offers to build a separate environment from it. The header is
 there so the notebook is self-describing and `marimo edit --sandbox` works;

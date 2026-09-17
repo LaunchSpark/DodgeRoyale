@@ -156,6 +156,10 @@ that is the only point PPO hands control back; saving in particular must happen
 on the training thread, since a save from elsewhere would read parameters
 mid-update. Stopping, failing, a rerun and interpreter exit all close the gym.
 
+The web game's AI dashboard button is in `web/index.html`; it opens the marimo
+URL in a new tab. Browser/WASM code does not spawn Python. Run marimo separately
+on loopback port 2718, or configure the button's URL for a hosted dashboard.
+
 Metrics are defined once, in `metrics.py`, and both the CLI and the dashboard
 report from the same collector. A metric is a `MetricDefinition` in `METRICS`
 plus a field on `Snapshot`; the dashboard renders whatever the registry lists,

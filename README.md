@@ -98,6 +98,18 @@ WebAssembly, and a keyboard. [Bevy CLI](https://thebevyflock.github.io/bevy_cli/
 compiles Rust to WebAssembly, generates the JavaScript bindings, and serves
 `web/index.html`.
 
+The browser game's **AI dashboard** button opens the local marimo server in a
+new tab. Start it in another terminal before clicking:
+
+```sh
+cd training
+uv run marimo run dodge_royale/dashboard.py --no-sandbox --headless --host 127.0.0.1 --port 2718
+```
+
+The button points to `http://127.0.0.1:2718/` on the browser's machine. For a
+hosted game, set `data-dashboard-url` on the button in `web/index.html` to the
+dashboard's reachable URL. The browser cannot start the Python server itself.
+
 To produce a static release bundle:
 
 ```sh
