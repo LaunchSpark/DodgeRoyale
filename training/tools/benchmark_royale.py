@@ -90,7 +90,12 @@ class Environment:
         root = Path(__file__).resolve().parent.parent.parent
         revision = run("git", "-C", str(root), "rev-parse", "HEAD")
         status = run("git", "-C", str(root), "status", "--porcelain")
-        changed = tuple(line[3:] for line in status.splitlines() if line.strip())
+        # Porcelain is two status columns, a space, then the path. Splitting
+        # on whitespace keeps the path whole where a fixed slice ate a
+        # character of it.
+        changed = tuple(
+            line[2:].strip() for line in status.splitlines() if line.strip()
+        )
         try:
             import psutil  # noqa: F401
 
@@ -143,6 +148,12 @@ class Environment:
             ["git", "-C", str(root), "diff", "HEAD"],
             capture_output=True, text=True, timeout=120,
         ).stdout
+        if not diff.strip():
+            # Git reports a file as changed when only its line endings differ,
+            # and then `diff` is empty. Saying "dirty" with nothing to show
+            # for it would be worse than saying nothing.
+            object.__setattr__(self, "dirty", False)
+            return
         path = beside.with_suffix(".diff")
         path.write_text(diff, encoding="utf-8")
         self.diff_path = path.name
