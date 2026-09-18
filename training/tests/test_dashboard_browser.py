@@ -179,8 +179,17 @@ def test_the_controls_are_present(dashboard):
         assert dashboard.get_by_role("button", name=label, exact=False).count() >= 1, label
 
 
-def test_watch_agent_is_shown_as_unavailable(dashboard):
-    assert dashboard.get_by_text("Watch Agent is not available").count() >= 1
+def test_the_watch_viewer_is_offered_and_starts_nothing_on_its_own(
+    dashboard, gyms_before
+):
+    """The controls are there, and loading the page does not open a gym for
+    them: watching is something you ask for."""
+    assert dashboard.get_by_text("Watch the agent").count() >= 1
+    assert dashboard.get_by_role(
+        "button", name="Watch", exact=False
+    ).count() >= 1
+    assert dashboard.get_by_text("Not watching").count() >= 1
+    assert gym_processes() == gyms_before
 
 
 def test_the_configuration_summary_renders(dashboard):

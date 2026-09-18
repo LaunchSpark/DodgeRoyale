@@ -33,6 +33,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 from .metrics import MetricsCollector, Snapshot
 from .history import HistoryWriter
+from .snapshots import SnapshotPublisher, snapshot_dir
 from .training import (
     CheckpointWriter,
     SessionConfig,
@@ -310,9 +311,12 @@ class TrainingWorker:
                 self._model = build_model(self.config, env, resume=self.resume)
                 self._set_state(WorkerState.RUNNING)
                 self._publish(force=True)
+                self._publisher = SnapshotPublisher(
+                    snapshot_dir(self.config.checkpoint_dir, self.config.run_name)
+                )
                 self._model.learn(
                     total_timesteps=self.config.total_timesteps,
-                    callback=[self._collector, _Control(self)],
+                    callback=[self._collector, _Control(self), self._publisher],
                 )
                 # A run that reaches its budget, or is stopped, keeps its
                 # weights: losing them would make stopping expensive.

@@ -258,9 +258,24 @@ cell that *created* a run would create another on every rerun, and the worker
 lives outside the notebook to prevent exactly that. Stopping, failing, closing
 the tab or killing the kernel all close the gym process.
 
-**Watch Agent is deliberately absent.** Watching the policy play needs the
-trained weights running inside the game, which is the in-game autopilot: its
-own spec, written after a policy trains.
+### Watch the agent
+
+The dashboard can run the newest policy and draw **what it sees** — the
+256-pixel observation window, the nine paths it is choosing between, and which
+one it took. Not the arena: protocol v1 carries the observation, not the world.
+That is the more useful picture anyway, because it is exactly the information
+the policy had. A dodge into a threat is a bug in the field; a dodge into empty
+space is a bug in the paths.
+
+A snapshot is published automatically after every completed update, to
+`<checkpoint-dir>/<run-name>-live/update-XXXXXXXX.zip`. The viewer picks up the
+newest one **between episodes, never during one**, so every episode is
+attributable to a single update. Writes are atomic — a hidden name renamed into
+place — so the viewer can never open a half-written zip, and only the newest few
+are kept.
+
+Watching the agent play the real game, with the game's own art, is the in-game
+autopilot: weight export and a Rust forward pass, which is its own spec.
 
 ## Layout
 
@@ -280,6 +295,9 @@ training/
     training.py           # PPO session and process lifecycle  [done]
     train.py              # CLI entry point  [done]
     history.py            # Per-episode training history  [done]
+    snapshots.py          # A policy snapshot per update  [done]
+    viewer.py             # Renders what the policy sees  [done]
+    watching.py           # The one watch session a kernel owns  [done]
     metrics.py            # Metric definitions shared by CLI and dashboard  [done]
     worker.py             # Background training thread and its controls  [done]
     dashboard.py          # marimo dashboard  [done]

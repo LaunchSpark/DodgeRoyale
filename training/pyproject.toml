@@ -32,6 +32,9 @@ dashboard = [
     # survival and return charts need these explicitly.
     "altair>=5.0",
     "polars>=1.0",
+    # marimo renders an ndarray as an image only through PIL, which the watch
+    # viewer needs to draw the observation.
+    "pillow>=10.0",
 ]
 # Which PyTorch build to fetch. Exactly one of these, and never both: PyPI's
 # Windows wheel is CPU-only, so a GPU needs the build from PyTorch's own index.

@@ -26,9 +26,10 @@ from typing import Any, Iterator
 
 import numpy as np
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, CallbackList
 
 from .history import HistoryWriter, history_path, read_history, run_history_path
+from .snapshots import SnapshotPublisher, snapshot_dir
 from .policies import ARCHITECTURES, ROYALE_ARCHITECTURE, Architecture, require_loadable
 from .protocol import GymError, Layout
 from .rewards import Rewards
@@ -337,8 +338,12 @@ def train(
             print(f"continuing a history of {inherited} episodes")
         model = build_model(config, env, resume=resume)
         attach_history(callback, episodes, config)
+        # Every completed update is published automatically, so a viewer can
+        # always pick up the most recent policy without the run being asked.
+        publisher = SnapshotPublisher(snapshot_dir(config.checkpoint_dir, config.run_name))
+        callbacks = CallbackList([c for c in (callback, publisher) if c is not None])
         try:
-            model.learn(total_timesteps=config.total_timesteps, callback=callback)
+            model.learn(total_timesteps=config.total_timesteps, callback=callbacks)
         except KeyboardInterrupt:
             # An interrupted run still has weights worth keeping; losing them
             # would make stopping a run expensive enough to avoid.

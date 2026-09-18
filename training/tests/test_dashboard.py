@@ -526,12 +526,17 @@ def test_the_notebook_never_constructs_a_worker_directly():
     )
 
 
-def test_watch_agent_is_documented_as_unavailable():
+def test_the_watch_viewer_goes_through_the_session_singleton():
+    """Same hazard as the trainer: a cell that built a watch session would
+    build another on every tick, each with its own gym."""
     from pathlib import Path
 
     source = Path(dashboard_path()).read_text(encoding="utf-8")
-    assert "Watch Agent is not available" in source
-    assert "autopilot" in source
+    assert "Watch the agent" in source
+    assert "WatchSession(" not in source, (
+        "the notebook must reach the session through start_watch/active_watch"
+    )
+    assert "start_watch" in source and "active_watch" in source
 
 
 def dashboard_path() -> str:
