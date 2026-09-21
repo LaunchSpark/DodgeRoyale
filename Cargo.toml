@@ -37,6 +37,8 @@ tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "ne
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 bevy = { version = "0.19.1", default-features = false, features = ["webgl2"] }
 fastrand = { version = "2.5", features = ["js"] }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
 
 [package.metadata.bevy_cli.web]
 wasm-opt = false

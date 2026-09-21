@@ -35,3 +35,7 @@ __pycache__/
 training/.venv/
 training/runs/
 training/checkpoints/
+# Tests launched from the repository root use the same relative checkpoint dir.
+/checkpoints/
+# A registered git worktree, not repository content.
+/.claude/worktrees/

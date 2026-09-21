@@ -8,7 +8,7 @@ use crate::simulation::{PlayerIntent, PlayerSet, spawn_player_body};
 use super::art::{ActiveTheme, ink};
 use super::ghost::Ghosted;
 use super::player_art::{PlayerArt, TrailEmitter};
-use super::screen::{GameEntity, Screen};
+use super::screen::{GameEntity, Screen, WatchMode};
 
 /// How high the player draws above the arena floor.
 const PLAYER_Z: f32 = 10.0;
@@ -57,7 +57,14 @@ fn spawn_player(mut commands: Commands, theme: Res<ActiveTheme>, art: Res<Player
     clippy::needless_pass_by_value,
     reason = "Bevy system parameters are injected by value"
 )]
-fn read_keyboard(keys: Res<ButtonInput<KeyCode>>, mut players: Query<&mut PlayerIntent>) {
+pub(super) fn read_keyboard(
+    keys: Res<ButtonInput<KeyCode>>,
+    watch: Res<WatchMode>,
+    mut players: Query<&mut PlayerIntent>,
+) {
+    if watch.0 {
+        return;
+    }
     let direction = Vec2::new(
         input_axis(
             keys.any_pressed([KeyCode::KeyA, KeyCode::ArrowLeft]),

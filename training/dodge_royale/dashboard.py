@@ -370,10 +370,9 @@ def _(mo):
 
     ## Watch the agent
 
-    What the policy sees and what it decides. Not the arena -- protocol v1
-    carries the observation, not the world -- which is the more useful picture
-    anyway: a dodge into a threat is a bug in the field, a dodge into empty
-    space is a bug in the paths.
+    Watch the real browser game. It uses the game's own camera, art and trails;
+    each policy action is applied to that game's player. Start the web game
+    with `./run.sh web`, then press Watch here.
 
     Snapshots are published after every update and picked up between episodes,
     never during one.
@@ -384,45 +383,40 @@ def _(mo):
 @app.cell
 def _(mo):
     watch_button = mo.ui.run_button(label="Watch / stop watching")
-    watch_enemies = mo.ui.slider(1, 200, value=100, label="Enemies", show_value=True)
-    watch_scale = mo.ui.slider(4, 12, value=8, label="Zoom", show_value=True)
-    mo.hstack([watch_button, watch_enemies, watch_scale], justify="start")
-    return watch_button, watch_enemies, watch_scale
+    watch_url = mo.ui.text(value="http://127.0.0.1:4000/", label="Game URL")
+    mo.hstack([watch_button, watch_url], justify="start")
+    return watch_button, watch_url
 
 
 @app.cell
-def _(active_watch, staged, start_watch, stop_watch, watch_button, watch_enemies):
+def _(active_watch, staged, start_watch, stop_watch, watch_button, watch_url):
     # Same singleton discipline as the trainer: the session lives outside the
     # notebook, so a rerun finds it rather than opening a second gym.
     if watch_button.value and active_watch() is not None:
         stop_watch()
         watching = None
     elif watch_button.value:
-        watching = start_watch(staged, enemies=int(watch_enemies.value))
+        watching = start_watch(staged, web_url=watch_url.value)
     else:
         watching = active_watch()
     return (watching,)
 
 
 @app.cell
-def _(mo, refresh, watch_scale, watching):
-    refresh.value  # advance a frame on every tick
+def _(mo, watching):
+    import html
 
-    view = mo.md("*Not watching. Press the button to run the newest policy.*")
-    if watching is not None:
-        drawn = watching.step(scale=int(watch_scale.value))
-        label = (
-            f"update {drawn.update}" if drawn.update is not None else "no snapshot yet"
+    # The iframe contains the real Bevy game; marimo's metrics clock never
+    # replaces it. The local service behind its URL returns a direction and the
+    # danger field it was chosen from.
+    if watching is None:
+        view = mo.md("*Not watching. Press the button to run the newest policy.*")
+    else:
+        view = mo.Html(
+            f'<iframe src="{html.escape(watching.url, quote=True)}" title="Agent game" '
+            'tabindex="-1" style="width:100%;height:820px;border:0;'
+            'background:#2b89bd;pointer-events:none"></iframe>'
         )
-        view = mo.vstack([
-            mo.image(drawn.image, width=drawn.image.shape[1]),
-            mo.md(
-                f"**{label}** &middot; episode {drawn.episode} &middot; "
-                f"frame {drawn.frame} ({drawn.seconds:.2f} s) &middot; "
-                f"chose **{drawn.action_name}**"
-                + (f"<br>*{watching.error}*" if watching.error else "")
-            ),
-        ])
     view
     return
 

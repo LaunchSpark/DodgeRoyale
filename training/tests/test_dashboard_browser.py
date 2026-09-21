@@ -14,12 +14,17 @@ the rest of the suite put together.
 
 from __future__ import annotations
 
+import os
+import shutil
 import socket
 import subprocess
 import tempfile
 import sys
 import time
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import threading
 
 import pytest
 
@@ -52,7 +57,22 @@ def free_port() -> int:
 
 
 @pytest.fixture(scope="module")
-def server():
+def workspace():
+    """An empty directory for the dashboard to write checkpoints into.
+
+    Removed best effort: on Windows a directory that is still some process's
+    working directory cannot be deleted, and the server has only just been
+    asked to stop. A leftover temp directory is not a test failure.
+    """
+    directory = tempfile.mkdtemp(prefix="royale-dashboard-")
+    try:
+        yield directory
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+@pytest.fixture(scope="module")
+def server(workspace):
     """A marimo server for the notebook, torn down however the tests end.
 
     `--no-sandbox` because the notebook carries a PEP 723 header and marimo
@@ -66,13 +86,19 @@ def server():
     handle = log.open("w", encoding="utf-8")
     process = subprocess.Popen(
         [
-            sys.executable, "-m", "marimo", "run", str(NOTEBOOK),
+            sys.executable, "-m", "dodge_royale.dashboard_server", "run", str(NOTEBOOK),
             "--no-sandbox", "--headless", "--host", "127.0.0.1",
             "--port", str(port), "--no-token",
         ],
         stdout=handle,
         stderr=subprocess.STDOUT,
-        cwd=NOTEBOOK.parent.parent,
+        # Its own working directory, because the notebook resolves
+        # `checkpoint_dir` relative to one. Run from the package directory it
+        # would read whatever real snapshots a developer's own training left
+        # there, and a checkpoint from a superseded architecture would fail the
+        # watch tests for a reason that has nothing to do with the dashboard.
+        cwd=workspace,
+        env={**os.environ, "PYTHONPATH": str(NOTEBOOK.parent.parent)},
     )
     SERVER_LOG.append(log)
     url = f"http://127.0.0.1:{port}"
@@ -174,6 +200,29 @@ def test_the_page_loads_with_no_run_and_no_gym(dashboard, gyms_before):
     assert dashboard.get_by_text("No run yet").count() >= 1
 
 
+def test_concurrent_sessions_initialize_the_learner_without_cell_errors(server, browser):
+    """Marimo's run-mode kernels share import hooks; concurrent first imports
+    must not see a half-initialized PyTorch module."""
+    pages = [browser.new_page() for _ in range(3)]
+    errors: list[list[str]] = [[] for _ in pages]
+    try:
+        for page, recorded in zip(pages, errors, strict=True):
+            page.on(
+                "console",
+                lambda message, recorded=recorded: recorded.append(message.text)
+                if message.type == "error" or "internal error" in message.text.lower()
+                else None,
+            )
+        for page in pages:
+            page.goto(server, wait_until="domcontentloaded")
+        for page in pages:
+            page.locator("h3").first.wait_for(timeout=90_000)
+        assert errors == [[], [], []]
+    finally:
+        for page in pages:
+            page.close()
+
+
 def test_the_controls_are_present(dashboard):
     for label in ("Start", "Pause", "Save checkpoint", "Stop"):
         assert dashboard.get_by_role("button", name=label, exact=False).count() >= 1, label
@@ -185,11 +234,75 @@ def test_the_watch_viewer_is_offered_and_starts_nothing_on_its_own(
     """The controls are there, and loading the page does not open a gym for
     them: watching is something you ask for."""
     assert dashboard.get_by_text("Watch the agent").count() >= 1
-    assert dashboard.get_by_role(
-        "button", name="Watch", exact=False
-    ).count() >= 1
+    dashboard.get_by_role("button", name="Watch", exact=False).wait_for(
+        timeout=30_000
+    )
     assert dashboard.get_by_text("Not watching").count() >= 1
     assert gym_processes() == gyms_before
+
+
+def test_watch_iframe_keeps_the_game_mounted_across_metric_ticks(dashboard, gyms_before):
+    press(dashboard, "Watch")
+    viewer = dashboard.locator('iframe[title="Agent game"]')
+    viewer.wait_for(timeout=30_000)
+    assert "watch=1" in viewer.get_attribute("src")
+    assert viewer.get_attribute("tabindex") == "-1"
+    assert viewer.evaluate("frame => getComputedStyle(frame).pointerEvents") == "none"
+    bounds = viewer.bounding_box()
+    assert bounds is not None
+    dashboard.mouse.click(bounds["x"] + bounds["width"] / 2, bounds["y"] + bounds["height"] / 2)
+    assert dashboard.evaluate("document.activeElement?.tagName") != "IFRAME"
+    # Marimo's metrics refresh must leave the real game iframe mounted.
+    viewer.evaluate("element => { window.watchFrame = element; }")
+    dashboard.wait_for_timeout(2200)
+    assert viewer.evaluate("element => element === window.watchFrame")
+
+    press(dashboard, "Watch")
+    dashboard.get_by_text("Not watching").wait_for(timeout=30_000)
+    deadline = time.monotonic() + 30
+    while gym_processes() > gyms_before and time.monotonic() < deadline:
+        dashboard.wait_for_timeout(200)
+    assert gym_processes() == gyms_before
+
+
+def test_watch_iframe_runs_the_real_web_game(dashboard):
+    bundle = (
+        NOTEBOOK.parent.parent.parent / "target" / "bevy_web" / "web-release" / "dodge-royale"
+    )
+    index = bundle / "index.html"
+    if not index.exists() or "dodgeObserve" not in index.read_text(encoding="utf-8"):
+        pytest.skip("build the current web bundle first")
+
+    class QuietHandler(SimpleHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+    web = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(QuietHandler, directory=str(bundle))
+    )
+    thread = threading.Thread(target=web.serve_forever, daemon=True)
+    thread.start()
+    try:
+        dashboard.locator('input[value="http://127.0.0.1:4000/"]').fill(
+            f"http://127.0.0.1:{web.server_port}/", timeout=10_000
+        )
+        press(dashboard, "Watch")
+        game = dashboard.frame_locator('iframe[title="Agent game"]')
+        if not dashboard.evaluate("!!document.createElement('canvas').getContext('webgl2')"):
+            pytest.skip("this browser has no WebGL 2")
+        status = game.locator("#watch-status")
+        status.wait_for(timeout=90_000)
+        deadline = time.monotonic() + 20
+        while "waiting for a policy" in status.inner_text() and time.monotonic() < deadline:
+            dashboard.wait_for_timeout(200)
+        assert status.inner_text().startswith("Watch mode · "), status.inner_text()
+        assert game.locator("#loading").is_hidden()
+        press(dashboard, "Watch")
+        dashboard.get_by_text("Not watching").wait_for(timeout=30_000)
+    finally:
+        web.shutdown()
+        web.server_close()
+        thread.join()
 
 
 def test_the_configuration_summary_renders(dashboard):

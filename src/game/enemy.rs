@@ -4,7 +4,7 @@ use super::{
     art::{ActiveTheme, ink},
     ghost::Ghosted,
     player::Player,
-    screen::{GameEntity, Screen, Transition},
+    screen::{GameEntity, Screen, Transition, WatchMode},
 };
 use crate::{
     art::{PIXEL, shadow_translation},
@@ -47,15 +47,37 @@ fn clear_spawn_queue(mut queue: ResMut<EnemySpawnQueue>) {
     queue.clear();
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Bevy injects system parameters by value"
+)]
 fn return_after_defeat(
     mut hits: MessageReader<PlayerHit>,
     players: Query<(), With<Player>>,
     mut transition: ResMut<Transition>,
+    watch: Res<WatchMode>,
 ) {
     for hit in hits.read() {
         if players.contains(hit.target) {
-            transition.start(Screen::Menu);
+            // Bevy runs OnExit and OnEnter for a same-state transition. That
+            // resets the arena under the wipe without showing the menu.
+            transition.start(death_destination(watch.0));
         }
+    }
+}
+
+const fn death_destination(watch: bool) -> Screen {
+    if watch { Screen::Playing } else { Screen::Menu }
+}
+
+#[cfg(test)]
+mod watch_tests {
+    use super::{Screen, death_destination};
+
+    #[test]
+    fn watch_deaths_restart_gameplay_without_entering_the_menu() {
+        assert_eq!(death_destination(true), Screen::Playing);
+        assert_eq!(death_destination(false), Screen::Menu);
     }
 }
 

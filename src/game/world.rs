@@ -1,9 +1,10 @@
 //! The arena, painted in the active theme.
 
-use bevy::prelude::*;
+use bevy::{camera::visibility::VisibilitySystems, prelude::*, window::PrimaryWindow};
 
 pub(super) use crate::motion::WORLD_HALF_EXTENTS;
 
+use crate::camera_math::viewport_half_size;
 use crate::scale::{
     GRID_COLUMNS, GRID_MAJOR_EVERY, GRID_ROWS, GRID_SPACING, MARK_COLUMNS, MARK_ROWS, MARK_SPACING,
 };
@@ -18,10 +19,23 @@ const MARKING: f32 = 0.45;
 
 pub(super) struct WorldPlugin;
 
+/// Which periodic copy of the floor this root represents.
+#[derive(Component)]
+struct WorldTile {
+    x: i16,
+    y: i16,
+}
+
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(Screen::Playing), spawn_world)
-            .add_systems(OnExit(Screen::Playing), despawn_world);
+            .add_systems(OnExit(Screen::Playing), despawn_world)
+            .add_systems(
+                PostUpdate,
+                show_visible_tiles
+                    .before(VisibilitySystems::VisibilityPropagate)
+                    .run_if(in_state(Screen::Playing)),
+            );
     }
 }
 
@@ -44,8 +58,16 @@ fn spawn_world(mut commands: Commands, theme: Res<ActiveTheme>) {
             let root = commands
                 .spawn((
                     GameEntity,
+                    WorldTile {
+                        x: tile_x,
+                        y: tile_y,
+                    },
                     Transform::from_translation(offset.extend(0.0)),
-                    Visibility::default(),
+                    if tile_x == 0 && tile_y == 0 {
+                        Visibility::Visible
+                    } else {
+                        Visibility::Hidden
+                    },
                 ))
                 .id();
             flat_rect(
@@ -59,6 +81,42 @@ fn spawn_world(mut commands: Commands, theme: Res<ActiveTheme>) {
             spawn_grid(&mut commands, root, theme.0.shadow);
             spawn_landmarks(&mut commands, root, theme.0.shadow);
             spawn_origin(&mut commands, root, theme.0.shadow);
+        }
+    }
+}
+
+/// The centre tile is always present. A neighbouring copy is needed only when
+/// the viewport crosses that side of the world's seam.
+fn tile_axis_visible(tile: i16, camera: f32, world_half: f32, view_half: f32) -> bool {
+    match tile {
+        -1 => camera - view_half <= -world_half,
+        0 => true,
+        1 => camera + view_half >= world_half,
+        _ => false,
+    }
+}
+
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Bevy injects system parameters by value"
+)]
+fn show_visible_tiles(
+    camera: Single<&Transform, With<Camera2d>>,
+    window: Single<&Window, With<PrimaryWindow>>,
+    mut tiles: Query<(&WorldTile, &mut Visibility)>,
+) {
+    let eye = camera.translation.truncate();
+    let view_half = viewport_half_size(window.width(), window.height());
+    for (tile, mut visibility) in &mut tiles {
+        let visible = tile_axis_visible(tile.x, eye.x, WORLD_HALF_EXTENTS.x, view_half.x)
+            && tile_axis_visible(tile.y, eye.y, WORLD_HALF_EXTENTS.y, view_half.y);
+        let desired = if visible {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+        if *visibility != desired {
+            *visibility = desired;
         }
     }
 }
@@ -230,5 +288,24 @@ fn flat_frame(
 fn despawn_world(mut commands: Commands, entities: Query<Entity, With<GameEntity>>) {
     for entity in &entities {
         commands.entity(entity).despawn();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tile_axis_visible;
+
+    #[test]
+    fn adjacent_floor_copies_appear_only_at_a_visible_seam() {
+        let half_world = 3_000.0;
+        let half_view = 800.0;
+        for tile in [-1, 1] {
+            assert!(!tile_axis_visible(tile, 0.0, half_world, half_view));
+        }
+        assert!(tile_axis_visible(0, 0.0, half_world, half_view));
+        assert!(tile_axis_visible(-1, -2_200.0, half_world, half_view));
+        assert!(tile_axis_visible(1, 2_200.0, half_world, half_view));
+        assert!(!tile_axis_visible(1, -2_200.0, half_world, half_view));
+        assert!(!tile_axis_visible(-1, 2_200.0, half_world, half_view));
     }
 }

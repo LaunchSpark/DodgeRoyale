@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 
 use super::art::{ActiveTheme, ink, shadowed_rect};
-use super::screen::{MenuEntity, Screen, Transition};
+use super::screen::{MenuEntity, Screen, Transition, WatchMode};
 use super::text::draw_text;
 
 /// The items on the title screen, in order.
@@ -34,7 +34,15 @@ impl Plugin for MenuPlugin {
     clippy::needless_pass_by_value,
     reason = "Bevy injects system parameters by value"
 )]
-fn enter_menu(mut commands: Commands, theme: Res<ActiveTheme>, cursor: Res<MenuCursor>) {
+fn enter_menu(
+    mut commands: Commands,
+    theme: Res<ActiveTheme>,
+    cursor: Res<MenuCursor>,
+    watch: Res<WatchMode>,
+) {
+    if watch.0 {
+        return;
+    }
     draw_menu(&mut commands, &theme, cursor.0);
 }
 
@@ -95,8 +103,9 @@ fn navigate(
     mut cursor: ResMut<MenuCursor>,
     mut transition: ResMut<Transition>,
     entities: Query<Entity, With<MenuEntity>>,
+    watch: Res<WatchMode>,
 ) {
-    if transition.is_running() {
+    if watch.0 || transition.is_running() {
         return;
     }
     let down = keys.any_just_pressed([KeyCode::ArrowDown, KeyCode::KeyS]);

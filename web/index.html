@@ -21,6 +21,7 @@
 
       html, body { width: 100%; height: 100%; margin: 0; }
       body { padding: 0 24px; overflow: hidden; }
+      body.watch-mode { padding: 0; }
 
       .shell {
         display: grid;
@@ -96,6 +97,19 @@
       .loading-title { margin: 0; font-size: 15px; font-weight: 500; }
       .loading-detail { margin: 12px 0 0; font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
       .loading.failed .loading-square { animation: none; }
+      #watch-status {
+        position: absolute;
+        left: 12px;
+        top: 12px;
+        max-width: calc(100% - 24px);
+        padding: 6px 9px;
+        color: #fff9e9;
+        background: #18374add;
+        font-size: 11px;
+        pointer-events: none;
+      }
+      .watch-mode .shell { grid-template-rows: minmax(0, 1fr); }
+      .watch-mode .topbar, .watch-mode .footer { display: none; }
 
       .controls { flex-wrap: wrap; gap: 9px; font-size: 11px; }
       .footer-actions { gap: 12px; flex-shrink: 0; }
@@ -159,6 +173,7 @@
             <noscript>Enable JavaScript to play Dodge Royale.</noscript>
           </div>
         </div>
+        <div id="watch-status" hidden role="status">Watch mode: waiting for a policy…</div>
       </section>
 
       <footer class="footer">
@@ -179,10 +194,96 @@
       const loading = document.querySelector("#loading");
       const title = document.querySelector("#loading-title");
       const detail = document.querySelector("#loading-detail");
-      const focusGame = () => canvas.focus({ preventScroll: true });
+      const watchStatus = document.querySelector("#watch-status");
+
+      // The Rust game draws its normal sprites, trails and camera. In watch
+      // mode it sends the *same game's* observation to a local Python policy
+      // service; the most recent answer becomes next frame's PlayerIntent.
+      //
+      // The reply also carries the danger field the policy read, tagged with
+      // the frame whose observation produced it. The game draws that field
+      // over the window it describes, so the picture stays anchored to the
+      // player position it was computed for rather than sliding along behind
+      // one that has since moved.
+      const query = new URLSearchParams(location.search);
+      const watchMode = query.get("watch") === "1";
+      const focusGame = () => {
+        if (!watchMode) canvas.focus({ preventScroll: true });
+      };
+      const policyUrl = query.get("policy_url");
+      const policyOrigin = policyUrl ? new URL(policyUrl) : null;
+      const localPolicy = policyOrigin?.protocol === "http:"
+        && ["127.0.0.1", "localhost"].includes(policyOrigin.hostname);
+      let watchAction = new Float32Array(2);
+      let watchField = null;
+      let requestInFlight = false;
+      let episode = 0;
+      if (watchMode) {
+        document.body.classList.add("watch-mode");
+        canvas.tabIndex = -1;
+        canvas.setAttribute("aria-label", "AI-controlled Dodge Royale gameplay");
+        canvas.removeAttribute("aria-describedby");
+        watchStatus.hidden = false;
+        if (!localPolicy) watchStatus.textContent = "Watch mode needs a local policy server.";
+      }
+      window.dodgeWatchEnabled = () => watchMode && localPolicy;
+      window.dodgeAction = () => watchAction;
+      window.dodgeField = () => watchField;
+      // Set by the game once a field has been anchored and uploaded, so the
+      // page (and a test) can tell a drawn field from a merely delivered one.
+      window.dodgeDrawnFrame = null;
+      window.dodgeFieldDrawn = (frame) => { window.dodgeDrawnFrame = frame; };
+      window.dodgeEpisode = () => {
+        if (!localPolicy) return;
+        episode += 1;
+        watchAction = new Float32Array(2);
+        watchField = null;
+        window.dodgeDrawnFrame = null;
+        fetch(new URL("episode", policyOrigin), { method: "POST", cache: "no-store" })
+          .catch((error) => { watchStatus.textContent = `Policy server: ${error}`; });
+      };
+      window.dodgeObserve = (values, layout, frame) => {
+        if (!localPolicy || requestInFlight) return;
+        requestInFlight = true;
+        const requestedEpisode = episode;
+        fetch(new URL("infer", policyOrigin), {
+          method: "POST",
+          headers: { "Content-Type": "application/octet-stream", "X-Dodge-Layout": layout },
+          body: values.buffer,
+          cache: "no-store",
+        }).then(async (response) => {
+          if (!response.ok) throw new Error(await response.text());
+          const reply = await response.arrayBuffer();
+          if (requestedEpisode !== episode) return;
+          // Header: the field's edge in cells as a little-endian u16, two
+          // reserved bytes, then the chosen direction as x and y. Twelve bytes,
+          // so the field is aligned and can be read in place; a short or
+          // mis-sized body simply has no field.
+          if (reply.byteLength < 12) throw new Error("the policy sent no direction");
+          const header = new DataView(reply);
+          const edge = header.getUint16(0, true);
+          watchAction = new Float32Array([header.getFloat32(4, true), header.getFloat32(8, true)]);
+          watchField = edge && reply.byteLength === 12 + edge * edge * 4
+            ? { frame, edge, values: new Float32Array(reply, 12, edge * edge) }
+            : null;
+          const policyError = response.headers.get("X-Watch-Error");
+          watchStatus.textContent = policyError
+            ? `Policy: ${JSON.parse(policyError)}`
+            : `Watch mode · ${response.headers.get("X-Watch-Update") ?? "no snapshot yet"}`;
+        }).catch((error) => {
+          if (requestedEpisode === episode) {
+            // Nowhere, not the last heading: a policy that has stopped
+            // answering should stop the agent, not leave it running on the
+            // last thing it said.
+            watchAction = new Float32Array(2);
+            watchField = null;
+          }
+          watchStatus.textContent = `Policy server: ${error}`;
+        }).finally(() => { requestInFlight = false; });
+      };
 
       document.querySelector("#focus-game").addEventListener("click", focusGame);
-      canvas.addEventListener("pointerdown", focusGame);
+      if (!watchMode) canvas.addEventListener("pointerdown", focusGame);
 
       // Winit uses this exception to hand its event loop over to the browser.
       // This is also handled by Bevy CLI's default HTML entry point.
@@ -211,6 +312,7 @@
         });
         requestAnimationFrame(() => {
           if (!loading.classList.contains("failed")) loading.hidden = true;
+          if (watchMode) canvas.tabIndex = -1;
           focusGame();
         });
       } catch (error) {

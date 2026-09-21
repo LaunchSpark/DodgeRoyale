@@ -1,15 +1,11 @@
-"""Watch the agent: what the policy sees, and what it decides to do about it.
+"""Diagnostic observation renderer, separate from the dashboard's game iframe.
 
-Royale cannot show what DodgeAI's watcher showed. That one ran a Python
-reimplementation of the game and drew the arena; here the simulation is Rust
-and protocol v1 carries the observation, not the world. So this draws the
-observation instead -- the 256-pixel window the policy actually reads, the
-paths it is choosing between, and the danger it assigns each one.
+This draws the 256-pixel window, predicted paths and danger readout from the
+headless gym. The dashboard's Watch button now embeds the real Bevy web game
+and does not call this renderer or create a second arena.
 
-That turns out to be the more useful picture. Watching the arena shows what
-happened; watching the observation shows *why*, because it is exactly the
-information the policy had. A dodge into a threat is a bug in the field; a
-dodge into a wall of nothing is a bug in the paths.
+This diagnostic picture remains useful when investigating why a policy made a
+particular choice: it shows exactly the information the policy was given.
 
 Snapshots are picked up between episodes, never during one. A policy that
 changed mid-episode would make the episode unattributable to any update, and a

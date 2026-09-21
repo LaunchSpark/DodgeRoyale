@@ -78,7 +78,7 @@ start_dashboard() {
     echo "--> starting marimo at http://127.0.0.1:2718/"
     (
         cd training
-        "$dashboard_python" -m marimo run dodge_royale/dashboard.py \
+        "$dashboard_python" -m dodge_royale.dashboard_server run dodge_royale/dashboard.py \
             --no-sandbox --headless --host 127.0.0.1 --port 2718 --no-token
     ) &
     dashboard_pid=$!

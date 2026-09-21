@@ -13,6 +13,10 @@ pub(super) enum Screen {
     Playing,
 }
 
+/// The embedded viewer owns movement and restarts; the normal game remains interactive.
+#[derive(Resource, Default)]
+pub(super) struct WatchMode(pub bool);
+
 /// Marks entities owned by the menu, removed when the menu is left.
 #[derive(Component)]
 pub(super) struct MenuEntity;
@@ -67,6 +71,7 @@ pub(super) struct ScreenPlugin;
 impl Plugin for ScreenPlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<Screen>()
+            .init_resource::<WatchMode>()
             .init_resource::<Transition>()
             .add_systems(Startup, spawn_wipe)
             .add_systems(Update, advance_wipe);
