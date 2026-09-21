@@ -29,6 +29,16 @@ pub const fn top_speed() -> f32 {
     PLAYER_SPEED
 }
 
+/// How sharply velocity approaches its target, per second.
+///
+/// Published for the same reason as [`top_speed`]: a second implementation of
+/// these rules has to agree on the number, and one that restated it would be
+/// free to drift from this one without anything noticing.
+#[must_use]
+pub const fn movement_response() -> f32 {
+    MOVEMENT_RESPONSE
+}
+
 /// Advance a player's position and velocity using smooth acceleration and braking.
 ///
 /// Input is normalized and elapsed time is capped at 50 ms. The returned

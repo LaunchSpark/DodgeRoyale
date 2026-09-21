@@ -7,3 +7,5 @@
 # these binary anyway; "almost certainly" is not a guarantee worth relying on.
 tests/fixtures/gym-v2/*.bin binary
 tests/fixtures/gym-v2/manifest.json text eol=lf
+tests/fixtures/player-motion/*.bin binary
+tests/fixtures/player-motion/manifest.json text eol=lf

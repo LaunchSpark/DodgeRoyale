@@ -7,7 +7,7 @@
 use bevy::math::Vec2;
 
 use crate::gym::workers::*;
-use crate::observation::OBSERVATION_VALUES;
+use crate::observation::{OBSERVATION_VALUES, layout};
 
 /// A direction off the compass, so a test exercises the space the policy
 /// actually sends rather than the nine headings version 1 allowed.
@@ -62,6 +62,77 @@ fn run(envs: u32, workers: u32, steps: usize) -> (Vec<u64>, Vec<f32>, Vec<String
         }
     }
     (seeds, observations, records)
+}
+
+/// The same batch, with a different prediction horizon.
+fn held(envs: u32, workers: u32, hold_frames: u32) -> BatchConfig {
+    BatchConfig {
+        hold_frames,
+        ..config(envs, workers)
+    }
+}
+
+#[test]
+fn one_step_advances_exactly_one_frame() {
+    // The cadence everything else is built on: a policy decides once per
+    // simulated 1/60 second, because that is what one STEP costs. A reader
+    // that believed an action was held for several frames would train on one
+    // cadence and play on another.
+    let (mut batch, _frame_zero) = ArenaBatch::start(config(2, 1)).expect("the batch starts");
+    for expected in 1..=5_u32 {
+        let stepped = batch.step(&[Vec2::ZERO; 2]).expect("a step runs");
+        for transition in &stepped.transitions {
+            assert_eq!(
+                transition.frame, expected,
+                "one step advanced more than one frame"
+            );
+        }
+    }
+}
+
+#[test]
+fn hold_frames_moves_the_predicted_paths_and_nothing_else() {
+    // `hold_frames` is how far ahead the observation's candidate paths are
+    // predicted, and it is never an action repeat. Two batches that differ only
+    // in it must be in the same world, seeing the same hazards, disagreeing
+    // only about where each path would lead.
+    let brief = held(1, 1, 6);
+    let long = held(1, 1, 48);
+    let layout = layout(brief.hold_frames);
+    let paths = layout.path_section.offset..layout.path_section.offset + layout.path_section.length;
+
+    let (mut brief, _) = ArenaBatch::start(brief).expect("the brief batch starts");
+    let (mut long, _) = ArenaBatch::start(long).expect("the long batch starts");
+
+    let heading = Vec2::new(0.966, 0.259);
+    let mut brief_step = brief.step(&[heading]).expect("a step runs");
+    let mut long_step = long.step(&[heading]).expect("a step runs");
+    for _ in 0..4 {
+        brief_step = brief.step(&[heading]).expect("a step runs");
+        long_step = long.step(&[heading]).expect("a step runs");
+    }
+
+    assert_eq!(
+        brief_step.transitions.first().map(|t| t.frame),
+        long_step.transitions.first().map(|t| t.frame),
+        "the horizon changed how fast the arena advanced"
+    );
+
+    let (brief_values, long_values) = (&brief_step.observations, &long_step.observations);
+    assert_eq!(brief_values.len(), long_values.len());
+    let before_paths = paths.start;
+    assert_eq!(
+        brief_values.get(..before_paths),
+        long_values.get(..before_paths),
+        "the player and the hazards must be identical: the horizon is a \
+         prediction, and predicting further cannot move the world"
+    );
+    assert_ne!(
+        brief_values.get(paths.clone()),
+        long_values.get(paths),
+        "a longer horizon must reach further; if the paths match, hold_frames \
+         is not reaching the encoder at all"
+    );
 }
 
 #[test]

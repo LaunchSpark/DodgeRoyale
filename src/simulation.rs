@@ -9,6 +9,7 @@
 use bevy::ecs::schedule::{ScheduleLabel, SingleThreadedExecutor};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 use crate::collision::Collider;
@@ -673,6 +674,59 @@ pub const DEFAULT_HOLD_FRAMES: u32 = 24;
 /// A Gaussian never samples exactly zero, so an idle that had to be spelled
 /// `(0, 0)` would be an action the agent could never take.
 pub const IDLE_THRESHOLD: f32 = 0.2;
+
+/// Names the movement rules this build implements.
+///
+/// Recorded beside every motion fixture and in checkpoints, so a reader can say
+/// which rules its expectations came from. Bump it whenever any value in
+/// [`MotionContract`] changes meaning, which is what makes a stale fixture or a
+/// checkpoint trained under different physics fail loudly instead of quietly
+/// disagreeing by a few pixels a second.
+pub const MOTION_CONTRACT_ID: &str = "royale-motion-1";
+
+/// Every constant a second implementation of the movement rules must agree on.
+///
+/// The Python trainer predicts player displacement to align its own state, and
+/// nothing in the wire format carries these numbers. Without one record that
+/// both sides read, the two implementations agree only by coincidence, and stop
+/// agreeing the first time one of them is edited.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MotionContract {
+    /// [`MOTION_CONTRACT_ID`] for the build that produced this record.
+    pub id: String,
+    /// World units per second at full speed.
+    pub top_speed: f32,
+    /// How sharply velocity approaches its target, per second.
+    pub movement_response: f32,
+    /// The longest frame the motion model will integrate in one go.
+    pub max_frame_seconds: f32,
+    /// Commands shorter than this mean standing still.
+    pub idle_threshold: f32,
+    /// Seconds one simulation frame advances. One STEP is exactly one of these.
+    pub seconds_per_frame: f32,
+    /// World units in one reference pixel, which is what the model measures in.
+    pub world_units_per_pixel: f32,
+    /// Half the arena, for the wrap both sides have to perform identically.
+    pub world_half_extents: [f32; 2],
+}
+
+/// What this build's movement rules are.
+#[must_use]
+pub fn motion_contract() -> MotionContract {
+    MotionContract {
+        id: MOTION_CONTRACT_ID.to_owned(),
+        top_speed: crate::motion::top_speed(),
+        movement_response: crate::motion::movement_response(),
+        max_frame_seconds: crate::motion::MAX_FRAME_SECONDS,
+        idle_threshold: IDLE_THRESHOLD,
+        seconds_per_frame: FRAME.as_secs_f32(),
+        world_units_per_pixel: crate::scale::PIXEL,
+        world_half_extents: [
+            crate::scale::WORLD_HALF_EXTENTS.x,
+            crate::scale::WORLD_HALF_EXTENTS.y,
+        ],
+    }
+}
 
 /// A commanded direction as a player intent.
 ///

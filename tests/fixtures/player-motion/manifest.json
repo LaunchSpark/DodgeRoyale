@@ -1,0 +1,382 @@
+{
+  "contract": {
+    "id": "royale-motion-1",
+    "top_speed": 937.5,
+    "movement_response": 13.38861,
+    "max_frame_seconds": 0.05,
+    "idle_threshold": 0.2,
+    "seconds_per_frame": 0.016666668,
+    "world_units_per_pixel": 6.25,
+    "world_half_extents": [
+      3000.0,
+      2000.0
+    ]
+  },
+  "contract_bits": {
+    "id": "royale-motion-1",
+    "top_speed": 1147822080,
+    "movement_response": 1096169407,
+    "max_frame_seconds": 1028443341,
+    "idle_threshold": 1045220557,
+    "seconds_per_frame": 1015580809,
+    "world_units_per_pixel": 1086849024,
+    "world_half_extents": [
+      1161527296,
+      1157234688
+    ]
+  },
+  "regenerate": "cargo run --locked --no-default-features --example motion_fixtures",
+  "comparison": "Every `value` is the f32 widened to f64, so a reader that parses JSON numbers as doubles compares equal exactly. `bits` is the same value's little-endian u32, for a reader that would rather not trust that.",
+  "record": [
+    "command_x",
+    "command_y",
+    "intent_x",
+    "intent_y",
+    "position_x",
+    "position_y",
+    "velocity_x",
+    "velocity_y",
+    "displacement_x",
+    "displacement_y"
+  ],
+  "step_bytes": 40,
+  "note": "Each step's `position` and `velocity` are the values after that step. `displacement` is how far the player travelled during it, measured across a seam rather than by subtracting wrapped coordinates. `intent` is the command after the idle floor.",
+  "scenarios": [
+    {
+      "name": "rest",
+      "file": "rest.bin",
+      "purpose": "No command from rest: nothing accelerates and nothing drifts.",
+      "steps": 60,
+      "bytes": 2400,
+      "crosses_seam": false,
+      "start_position": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ],
+      "start_velocity": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ]
+    },
+    {
+      "name": "acceleration",
+      "file": "acceleration.bin",
+      "purpose": "Rest to top speed along +x. Pins the exponential ramp, and the integrated displacement during it.",
+      "steps": 120,
+      "bytes": 4800,
+      "crosses_seam": false,
+      "start_position": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ],
+      "start_velocity": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ]
+    },
+    {
+      "name": "braking",
+      "file": "braking.bin",
+      "purpose": "Accelerate, then release. Coasting is the same curve run toward a zero target, and it is what a stopping-offset lookahead has to predict.",
+      "steps": 120,
+      "bytes": 4800,
+      "crosses_seam": false,
+      "start_position": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ],
+      "start_velocity": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ]
+    },
+    {
+      "name": "reversal",
+      "file": "reversal.bin",
+      "purpose": "Full speed one way, then the opposite command. The hardest case for a predictor that assumes velocity follows the command immediately.",
+      "steps": 120,
+      "bytes": 4800,
+      "crosses_seam": false,
+      "start_position": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ],
+      "start_velocity": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ]
+    },
+    {
+      "name": "diagonal",
+      "file": "diagonal.bin",
+      "purpose": "The command (1, 1) has length root two. Normalisation makes it travel at an axis's speed, not faster.",
+      "steps": 90,
+      "bytes": 3600,
+      "crosses_seam": false,
+      "start_position": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ],
+      "start_velocity": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ]
+    },
+    {
+      "name": "off-compass",
+      "file": "off-compass.bin",
+      "purpose": "Fifteen degrees: a heading the nine-way action space could not express.",
+      "steps": 90,
+      "bytes": 3600,
+      "crosses_seam": false,
+      "start_position": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ],
+      "start_velocity": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ]
+    },
+    {
+      "name": "off-compass-negative",
+      "file": "off-compass-negative.bin",
+      "purpose": "Two hundred and fifty-five degrees, so both components are negative and a dropped sign cannot pass.",
+      "steps": 90,
+      "bytes": 3600,
+      "crosses_seam": false,
+      "start_position": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ],
+      "start_velocity": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ]
+    },
+    {
+      "name": "over-unit-command",
+      "file": "over-unit-command.bin",
+      "purpose": "A command five times unit length. Length sets no speed, so this matches `acceleration` step for step.",
+      "steps": 120,
+      "bytes": 4800,
+      "crosses_seam": false,
+      "start_position": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ],
+      "start_velocity": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ]
+    },
+    {
+      "name": "idle-floor",
+      "file": "idle-floor.bin",
+      "purpose": "A command whose length rises through the idle floor and falls back through it. Below the floor the intent is zero and the player coasts; above it the full target speed applies, however short the command.",
+      "steps": 120,
+      "bytes": 4800,
+      "crosses_seam": false,
+      "start_position": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ],
+      "start_velocity": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ]
+    },
+    {
+      "name": "seam-x",
+      "file": "seam-x.bin",
+      "purpose": "Driving off the +x edge and arriving at the -x one. The displacement stays small; only the coordinate jumps.",
+      "steps": 90,
+      "bytes": 3600,
+      "crosses_seam": true,
+      "start_position": [
+        {
+          "value": 2980.0,
+          "bits": 1161445376
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ],
+      "start_velocity": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ]
+    },
+    {
+      "name": "seam-y",
+      "file": "seam-y.bin",
+      "purpose": "The same across the +y edge. The two extents differ, so an axis mix-up lands somewhere else entirely.",
+      "steps": 90,
+      "bytes": 3600,
+      "crosses_seam": true,
+      "start_position": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 1980.0,
+          "bits": 1157070848
+        }
+      ],
+      "start_velocity": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ]
+    },
+    {
+      "name": "long-trace",
+      "file": "long-trace.bin",
+      "purpose": "Six hundred steps on a continuously turning heading, for the accumulated-error bound. Every step compounds, so a formula that is nearly right fails here and nowhere else.",
+      "steps": 600,
+      "bytes": 24000,
+      "crosses_seam": false,
+      "start_position": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ],
+      "start_velocity": [
+        {
+          "value": 0.0,
+          "bits": 0
+        },
+        {
+          "value": 0.0,
+          "bits": 0
+        }
+      ]
+    }
+  ]
+}
