@@ -13,6 +13,8 @@
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::thread::{self, JoinHandle};
 
+use bevy::math::Vec2;
+
 use crate::observation::{OBSERVATION_VALUES, encode};
 use crate::simulation::{ArenaConfig, ArenaError, HeadlessArena};
 
@@ -77,10 +79,12 @@ struct EnvOutcome {
 }
 
 /// What a worker is asked to do.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Not `Eq`: a step carries directions, and directions are floats.
+#[derive(Debug, Clone, PartialEq)]
 enum Command {
-    /// One action per env in this worker's shard, in shard order.
-    Step(Vec<u8>),
+    /// One direction per env in this worker's shard, in shard order.
+    Step(Vec<Vec2>),
     /// Restart every env in the shard. `Some` restarts the seed stream.
     Reset(Option<u64>),
     Shutdown,
@@ -138,10 +142,10 @@ impl EnvArena {
     }
 
     /// Step once, auto-resetting if the episode ends.
-    fn step(&mut self, action: u8) -> Result<EnvOutcome, BatchError> {
+    fn step(&mut self, direction: Vec2) -> Result<EnvOutcome, BatchError> {
         let episode_seed_before = self.current_seed();
         self.arena
-            .set_action(action)
+            .set_action(direction)
             .map_err(|error| self.fault(&error))?;
         let result = self.arena.step().map_err(|error| self.fault(&error))?;
 
@@ -269,21 +273,21 @@ impl ArenaBatch {
     ///
     /// As [`BatchError`]; an env that faults ends the batch rather than
     /// returning a partial result.
-    pub fn step(&mut self, actions: &[u8]) -> Result<StepBatch, BatchError> {
+    pub fn step(&mut self, actions: &[Vec2]) -> Result<StepBatch, BatchError> {
         if actions.len() != usize::try_from(self.envs).unwrap_or(usize::MAX) {
             return Err(BatchError::InvalidConfig(
-                "one action per env, in env order",
+                "one direction per env, in env order",
             ));
         }
         for worker in &self.workers {
-            let shard: Vec<u8> = worker
+            let shard: Vec<Vec2> = worker
                 .envs
                 .iter()
                 .map(|env| {
                     actions
                         .get(usize::try_from(*env).unwrap_or(usize::MAX))
                         .copied()
-                        .unwrap_or(0)
+                        .unwrap_or(Vec2::ZERO)
                 })
                 .collect();
             worker
@@ -413,7 +417,7 @@ fn run_worker(
             Command::Step(actions) => arenas
                 .iter_mut()
                 .zip(actions)
-                .map(|(arena, action)| arena.step(action))
+                .map(|(arena, direction)| arena.step(direction))
                 .collect(),
             Command::Reset(seed) => arenas.iter_mut().map(|arena| arena.reset(seed)).collect(),
         };

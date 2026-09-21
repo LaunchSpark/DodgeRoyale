@@ -21,7 +21,7 @@ except ImportError:
 
 # training/tests/conftest.py -> the repository root.
 REPOSITORY = Path(__file__).resolve().parent.parent.parent
-FIXTURES = REPOSITORY / "tests" / "fixtures" / "gym-v1"
+FIXTURES = REPOSITORY / "tests" / "fixtures" / "gym-v2"
 
 
 @pytest.fixture(scope="session")

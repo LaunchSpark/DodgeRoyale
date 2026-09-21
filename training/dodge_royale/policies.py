@@ -16,11 +16,13 @@ import torch
 from stable_baselines3.common.policies import ActorCriticPolicy
 from torch import nn
 
-from .protocol import Layout, ProtocolError
+from .protocol import ACTION_DIRECTIONS, Layout, ProtocolError
 from .velocity import INITIAL_TEMPERATURE, VALUE_FEATURES, VelocityFlowRoyaleExtractor
 
 __all__ = [
     "ARCHITECTURES",
+    "LOG_STD_INIT",
+    "SUPERSEDED_ARCHITECTURES",
     "ROYALE",
     "Architecture",
     "ROYALE_ARCHITECTURE",
@@ -29,44 +31,108 @@ __all__ = [
     "checkpoint_layout",
     "policy_kwargs_for",
     "require_loadable",
+    "unit_directions",
 ]
 
 #: The only architecture this trainer builds. Named in checkpoints, so a run
 #: can say what it was.
-ROYALE_ARCHITECTURE = "velocity-flow-royale"
+#:
+#: The `-direction` suffix marks the action space, not a rewrite. A checkpoint
+#: from before it holds a nine-way categorical head, and its weights cannot be
+#: loaded into a policy that emits a heading -- the layout and the extractor are
+#: unchanged, so nothing else about the checkpoint would give that away. Without
+#: the name, an old checkpoint passes every compatibility gate and fails deep
+#: inside torch with a missing state-dict key, which says nothing about why.
+ROYALE_ARCHITECTURE = "velocity-flow-royale-direction"
+
+#: What this trainer used to build, kept only so a checkpoint from then can be
+#: recognised and refused for the right reason.
+SUPERSEDED_ARCHITECTURES = {
+    "velocity-flow-royale": (
+        "it was trained on the nine-way action space, before actions became "
+        "directions; its policy head cannot be loaded into this one"
+    ),
+}
+
+#: Starting spread of the Gaussian around the blended heading, as a log.
+#:
+#: SB3 defaults to zero, meaning a standard deviation of one -- as large as the
+#: unit heading it is added to, so the sampled direction would be very nearly
+#: noise and the field would have almost no say in where the agent went. At
+#: -1.0 the deviation is about 0.37, which perturbs a unit heading by roughly
+#: twenty degrees: enough to explore either side of a choice, small enough that
+#: the choice survives. PPO tunes it from there.
+LOG_STD_INIT = -1.0
 
 
-class _FieldLogits(nn.Module):
-    """Turn path danger into action logits, with a learnable sharpness.
+def unit_directions(layout: Layout) -> torch.Tensor:
+    """The nine candidate paths as unit headings: ``(actions, 2)``.
 
-    The field's units are arbitrary -- nothing pins its scale -- so without a
-    temperature the initial policy could be anywhere between uniform and
-    one-hot, and entropy would be set by initialisation rather than by
-    learning.
+    Normalised, because the blend below is a weighted sum of these. The
+    simulation writes a diagonal as ``(1, 1)``, and summing that unchanged
+    would give the corners half again the pull of the axes -- a policy that
+    slightly preferred up-right would drift further than one that equally
+    preferred right.
+    """
+    rows = []
+    for name in layout.actions:
+        try:
+            x, y = ACTION_DIRECTIONS[name]
+        except KeyError as error:
+            raise ProtocolError(
+                f"this policy has no heading for the action {name!r}"
+            ) from error
+        length = float(np.hypot(x, y))
+        rows.append((x / length, y / length) if length else (0.0, 0.0))
+    return torch.tensor(rows, dtype=torch.float32)
+
+
+class _FieldDirection(nn.Module):
+    """Turn path danger into a heading, with a learnable sharpness.
+
+    The nine paths are candidates, not choices: their headings are blended in
+    proportion to how safe the field says each one is, and the result is a
+    direction the agent can travel in whether or not it is one of the nine.
+    Any heading on the circle is reachable, because sliding weight from one
+    neighbour to the next sweeps the sum continuously between them.
+
+    Blending rather than picking is also what stops the twitching. An argmax
+    flips the whole action the instant two paths swap order, however close the
+    two readings were; a blend moves the heading by as much as the readings
+    moved. The jitter was never the agent changing its mind -- it was a
+    discrete output turning small changes of mind into large changes of course.
+
+    A mean near zero is the field saying every direction is as bad as every
+    other. The simulation reads that as standing still, which is what it means.
     """
 
     EPSILON = 1e-3
 
-    def __init__(self, actions: int, temperature: float = INITIAL_TEMPERATURE) -> None:
+    def __init__(self, directions: torch.Tensor, temperature: float = INITIAL_TEMPERATURE) -> None:
         super().__init__()
-        self.actions = actions
+        self.actions = int(directions.shape[0])
+        # A buffer, so it travels into the checkpoint: which way each path
+        # pointed is part of what the weights were trained against.
+        self.register_buffer("directions", directions)
         self.log_temperature = nn.Parameter(torch.tensor(float(np.log(temperature))))
 
     def forward(self, latent: torch.Tensor) -> torch.Tensor:
-        danger = latent[:, : self.actions]
-        # Standardise across the actions, so only the *shape* of the field
-        # reaches the distribution and its magnitude does not. Untouched, a
-        # freshly initialised field spreads its readings far too little to move
-        # a softmax, so the policy would sit at uniform until the field grew,
-        # learning nothing meanwhile. It also stops a field that drifts large
-        # from silently sharpening the policy toward greedy.
-        danger = danger - danger.mean(dim=1, keepdim=True)
-        spread = danger.std(dim=1, keepdim=True).clamp_min(self.EPSILON)
-        return danger / spread * self.log_temperature.exp()
+        safety = latent[:, : self.actions]
+        # Standardise across the paths, so only the *shape* of the field
+        # reaches the blend and its magnitude does not. Untouched, a freshly
+        # initialised field spreads its readings far too little to move a
+        # softmax, so every weight would sit at a ninth and the heading would
+        # be the average of all nine -- zero -- until the field grew. It also
+        # stops a field that drifts large from silently collapsing the blend
+        # onto a single path, which is the argmax this exists to avoid.
+        safety = safety - safety.mean(dim=1, keepdim=True)
+        spread = safety.std(dim=1, keepdim=True).clamp_min(self.EPSILON)
+        weights = torch.softmax(safety / spread * self.log_temperature.exp(), dim=1)
+        return weights @ self.directions
 
 
 class VelocityFlowRoyalePolicy(ActorCriticPolicy):
-    """ActorCritic whose logits come from the field, not from a learned head."""
+    """ActorCritic whose heading comes from the field, not a learned head."""
 
     def __init__(self, *args, architecture: str = ROYALE_ARCHITECTURE, **kwargs) -> None:
         # Accepted and kept here rather than forwarded: SB3 splats
@@ -80,8 +146,10 @@ class VelocityFlowRoyalePolicy(ActorCriticPolicy):
 
     def _build(self, lr_schedule) -> None:
         super()._build(lr_schedule)
-        actions = len(self.features_extractor.layout.actions)
-        self.action_net = _FieldLogits(actions)
+        # `log_std` is whatever SB3 built for the Gaussian and is left alone;
+        # only the mean is taken over, which is the same trade the discrete
+        # discrete version made with the logits.
+        self.action_net = _FieldDirection(unit_directions(self.features_extractor.layout))
         # The optimizer was built over the head that was just replaced.
         self.optimizer = self.optimizer_class(
             self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs
@@ -95,7 +163,7 @@ def policy_kwargs_for(layout: Layout) -> dict[str, Any]:
     trained against is recoverable from the checkpoint alone -- which is what
     makes `require_loadable` possible without a running gym.
 
-    ``pi=[]`` because the actor has no hidden layers: the logits are the
+    ``pi=[]`` because the actor has no hidden layers: the heading is the
     field's own reading, and a layer between them would be a learned head,
     which is the thing this architecture exists not to have.
     """
@@ -104,6 +172,7 @@ def policy_kwargs_for(layout: Layout) -> dict[str, Any]:
         "features_extractor_class": VelocityFlowRoyaleExtractor,
         "features_extractor_kwargs": {"layout": layout.as_dict()},
         "net_arch": {"pi": [], "vf": [VALUE_FEATURES]},
+        "log_std_init": LOG_STD_INIT,
     }
 
 
@@ -182,6 +251,10 @@ def checkpoint_architecture(path) -> str:
     data = _saved_data(path)
     name = (data.get("policy_kwargs") or {}).get("architecture")
     if name:
+        if str(name) in SUPERSEDED_ARCHITECTURES:
+            raise ProtocolError(
+                f"{path} was trained with {name}: {SUPERSEDED_ARCHITECTURES[str(name)]}"
+            )
         return str(name)
     extractor = (data.get("policy_kwargs") or {}).get("features_extractor_class")
     if extractor is VelocityFlowRoyaleExtractor:

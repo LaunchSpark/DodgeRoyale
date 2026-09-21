@@ -17,12 +17,14 @@ from stable_baselines3.common.vec_env import VecEnv
 from dodge_royale.policies import (
     ARCHITECTURES,
     ROYALE_ARCHITECTURE,
+    SUPERSEDED_ARCHITECTURES,
     VelocityFlowRoyalePolicy,
-    _FieldLogits,
+    _FieldDirection,
     checkpoint_architecture,
     checkpoint_layout,
     policy_kwargs_for,
     require_loadable,
+    unit_directions,
 )
 from dodge_royale.protocol import Layout, ProtocolError
 from dodge_royale.velocity import (
@@ -34,7 +36,7 @@ from dodge_royale.velocity import (
     sample_points,
     sense_features,
 )
-from dodge_royale.vec_env import observation_space
+from dodge_royale.vec_env import action_space, observation_space
 
 
 @pytest.fixture(scope="session")
@@ -398,39 +400,99 @@ def test_a_layout_that_does_not_match_the_space_is_refused(layout):
         VelocityFlowRoyaleExtractor(wrong, layout)
 
 
-# --- logits --------------------------------------------------------------
+# --- the heading ----------------------------------------------------------
 
 
-def test_logits_are_standardised_so_only_the_field_shape_matters():
-    head = _FieldLogits(actions=9)
+def field_head(layout: Layout) -> _FieldDirection:
+    return _FieldDirection(unit_directions(layout))
+
+
+def test_the_nine_headings_are_unit_length_so_diagonals_do_not_outweigh_axes(layout):
+    directions = unit_directions(layout)
+    assert directions.shape == (9, 2)
+    lengths = directions.norm(dim=1)
+    assert float(lengths[0]) == 0.0, "idle points nowhere"
+    assert torch.allclose(lengths[1:], torch.ones(8), atol=1e-6)
+
+
+def test_the_heading_is_standardised_so_only_the_field_shape_matters(layout):
+    head = field_head(layout)
     # Comfortably above EPSILON, so the spread clamp is not what is being
     # measured here -- that case has its own test below.
     small = torch.randn(4, 73)
     large = small.clone()
     large[:, :9] *= 1000.0
-
-    from_small = head(small)
-    from_large = head(large)
-    assert torch.allclose(from_small, from_large, atol=1e-4), (
-        "scaling the field must not sharpen the policy"
+    assert torch.allclose(head(small), head(large), atol=1e-4), (
+        "scaling the field must not sharpen the heading"
     )
 
 
-def test_logits_survive_nine_identical_dangers():
+def test_the_heading_survives_nine_identical_dangers(layout):
     """Zero spread would be a division by zero without the clamp."""
-    head = _FieldLogits(actions=9)
-    latent = torch.zeros(2, 73)
-    logits = head(latent)
-    assert torch.isfinite(logits).all()
-    assert torch.allclose(logits, torch.zeros_like(logits))
+    head = field_head(layout)
+    heading = head(torch.zeros(2, 73))
+    assert torch.isfinite(heading).all()
+    # Every path equally safe averages the nine to nothing, which the
+    # simulation reads as standing still. That is the right answer, not a
+    # degenerate one.
+    assert torch.allclose(heading, torch.zeros_like(heading), atol=1e-6)
 
 
-def test_the_initial_temperature_keeps_the_first_policy_near_uniform():
-    head = _FieldLogits(actions=9)
+def test_a_safe_path_pulls_the_heading_towards_itself(layout):
+    head = field_head(layout)
+    latent = torch.zeros(1, 73)
+    latent[0, layout.actions.index("right")] = 10.0
+    heading = head(latent)[0].detach()
+    assert float(heading[0]) > 0.0 and abs(float(heading[1])) < 1e-5
+
+
+def test_the_headings_between_two_paths_are_reachable(layout):
+    """The whole point of blending: the agent is not limited to the nine.
+
+    Sliding weight from one neighbour to the next sweeps the heading through
+    the gap between them, monotonically and without a jump. It does not reach
+    either endpoint -- the seven other paths always hold some weight, so the
+    sum is always strictly inside the octagon -- and it does not need to: the
+    endpoints are the two paths themselves, and what version 1 could not
+    express is everything in between.
+    """
+    head = field_head(layout)
+    right, up_right = layout.actions.index("right"), layout.actions.index("up-right")
+    angles = []
+    for favour in torch.linspace(-3.0, 3.0, 25):
+        latent = torch.zeros(1, 73)
+        latent[0, right] = 6.0 - favour
+        latent[0, up_right] = 6.0 + favour
+        heading = head(latent)[0].detach()
+        angles.append(float(torch.atan2(heading[1], heading[0]).rad2deg()))
+
+    assert all(0.0 <= angle <= 45.0 for angle in angles), f"left the gap: {angles}"
+    assert min(angles) < 10.0 and max(angles) > 35.0, f"only reached {angles}"
+    steps = [b - a for a, b in zip(angles, angles[1:])]
+    assert all(step > 0.0 for step in steps), "favouring a path must turn towards it"
+    # Continuous, not a jump from one path to the other. That jump is the
+    # argmax this design replaced, and it is what made the agent twitch.
+    assert max(steps) < 3.0, f"the heading jumped by {max(steps)} degrees"
+
+
+def test_a_small_change_in_danger_makes_a_small_change_in_heading(layout):
+    """The jitter claim, stated as a property rather than as a comment."""
+    head = field_head(layout)
     torch.manual_seed(0)
-    latent = torch.randn(1, 73)
-    probabilities = torch.softmax(head(latent), dim=1).detach()
-    assert float(probabilities.max()) < 0.35, "committing to a random field is committing to noise"
+    base = torch.randn(1, 73)
+    nudged = base.clone()
+    nudged[0, :9] += torch.randn(9) * 1e-3
+    moved = (head(nudged) - head(base)).detach().norm()
+    assert float(moved) < 0.05, f"a whisker of danger moved the heading by {float(moved)}"
+
+
+def test_the_initial_temperature_keeps_the_first_heading_uncommitted(layout):
+    head = field_head(layout)
+    torch.manual_seed(0)
+    heading = head(torch.randn(1, 73)).detach()
+    # A random field is noise: the first policy should not set off across the
+    # arena on it. Below the simulation's idle floor is standing still.
+    assert float(heading.norm()) < 0.6, "committing to a random field is committing to noise"
 
 
 # --- policy and checkpoints ----------------------------------------------
@@ -440,29 +502,69 @@ def build_policy(layout: Layout):
     kwargs = policy_kwargs_for(layout)
     return VelocityFlowRoyalePolicy(
         observation_space(layout),
-        spaces.Discrete(len(layout.actions)),
+        action_space(layout),
         lr_schedule=lambda _: 3e-4,
         **kwargs,
     )
 
 
-def test_the_policy_uses_the_field_for_its_logits(layout):
+def test_the_policy_uses_the_field_for_its_heading(layout):
     policy = build_policy(layout)
-    assert isinstance(policy.action_net, _FieldLogits)
-    # An empty pi net: the logits are the field's own reading, and a hidden
+    assert isinstance(policy.action_net, _FieldDirection)
+    # An empty pi net: the heading is the field's own reading, and a hidden
     # layer between them would be the learned head this design does without.
     assert policy.mlp_extractor.latent_dim_pi == 73
+    # The Gaussian's spread is SB3's and is left alone, but it must not start
+    # so wide that the sampled heading is noise around the field's answer.
+    assert float(policy.log_std.detach().exp().max()) < 0.5
 
 
-def test_the_policy_produces_finite_actions_and_values(layout):
+def test_the_policy_produces_finite_directions_and_values(layout):
     policy = build_policy(layout)
     observation = torch.zeros(3, layout.observation_values)
     actions, values, log_prob = policy(observation)
-    assert actions.shape == (3,)
+    assert actions.shape == (3, 2), "a direction per env, not an index"
     assert values.shape == (3, 1)
+    assert torch.isfinite(actions).all()
     assert torch.isfinite(values).all()
     assert torch.isfinite(log_prob).all()
-    assert int(actions.max()) < len(layout.actions)
+
+
+def test_the_deterministic_heading_is_the_blend_itself(layout):
+    """No sampling, no clipping: what the field says is what is played."""
+    policy = build_policy(layout)
+    observation = torch.zeros(2, layout.observation_values)
+    with torch.no_grad():
+        chosen = policy(observation, deterministic=True)[0]
+        features = policy.extract_features(observation)
+        expected = policy.action_net(features)
+    assert torch.allclose(chosen, expected, atol=1e-6)
+
+
+def test_a_checkpoint_from_the_nine_way_action_space_is_refused_by_name(tmp_path):
+    """The one thing that distinguishes it.
+
+    The observation layout is unchanged and the extractor class is the same, so
+    every other compatibility gate waves an old checkpoint through and torch is
+    left to report a missing state-dict key. The architecture name is what says
+    the action space moved, which is the actual reason it cannot be loaded.
+    """
+    from stable_baselines3.common.save_util import save_to_zip_file
+
+    old = tmp_path / "update-00000001.zip"
+    save_to_zip_file(
+        str(old),
+        data={"policy_kwargs": {"architecture": "velocity-flow-royale"}},
+        params={},
+        pytorch_variables={},
+    )
+    with pytest.raises(ProtocolError, match="nine-way action space"):
+        checkpoint_architecture(old)
+
+
+def test_the_current_architecture_is_not_in_the_superseded_table():
+    """Or every checkpoint this trainer writes would be refused on sight."""
+    assert ROYALE_ARCHITECTURE not in SUPERSEDED_ARCHITECTURES
 
 
 def test_the_architecture_table_names_royale_and_carries_its_hyperparameters():
@@ -547,13 +649,16 @@ def test_a_saved_checkpoint_reloads_with_the_same_outputs(tmp_path, layout, mani
         device="cpu",
     )
     model.policy.set_training_mode(False)
-    # Move the temperature off its initial value, so a reload that silently
-    # rebuilt _FieldLogits from scratch would not coincidentally match.
+    # Move the temperature and the spread off their initial values, so a reload
+    # that silently rebuilt the head from scratch would not coincidentally
+    # match.
     with torch.no_grad():
         model.policy.action_net.log_temperature.fill_(0.37)
+        model.policy.log_std.fill_(-0.73)
     with torch.no_grad():
         before_values = model.policy.predict_values(observation)
-        before_logits = model.policy.get_distribution(observation).distribution.logits
+        before = model.policy.get_distribution(observation).distribution
+        before_heading, before_spread = before.mean.clone(), before.stddev.clone()
 
     path = tmp_path / "royale.zip"
     model.save(path)
@@ -561,15 +666,23 @@ def test_a_saved_checkpoint_reloads_with_the_same_outputs(tmp_path, layout, mani
     reloaded.policy.set_training_mode(False)
     with torch.no_grad():
         after_values = reloaded.policy.predict_values(observation)
-        after_logits = reloaded.policy.get_distribution(observation).distribution.logits
+        after = reloaded.policy.get_distribution(observation).distribution
+        after_heading, after_spread = after.mean.clone(), after.stddev.clone()
 
-    # The critic and the actor. Logits rather than sampled actions: sampling is
-    # stochastic and log_prob depends on which action was drawn, so neither
-    # would match across a reload without seeding, and comparing them would be
-    # testing the seed rather than the restore.
+    # The critic and the actor. The distribution rather than a sampled action:
+    # sampling is stochastic and log_prob depends on which action was drawn, so
+    # neither would match across a reload without seeding, and comparing them
+    # would be testing the seed rather than the restore.
     assert torch.allclose(before_values, after_values, atol=1e-6)
-    assert torch.allclose(before_logits, after_logits, atol=1e-6)
+    assert before_heading.shape == (observation.shape[0], 2), "a heading per env"
+    assert torch.allclose(before_heading, after_heading, atol=1e-6)
+    assert torch.allclose(before_spread, after_spread, atol=1e-6)
     assert reloaded.policy.action_net.log_temperature.item() == pytest.approx(0.37)
+    # The headings the nine paths point along travel with the weights: they are
+    # part of what the policy was trained against, not a constant it rebuilds.
+    assert torch.allclose(
+        reloaded.policy.action_net.directions, unit_directions(layout), atol=1e-6
+    )
     assert checkpoint_layout(path) == layout
 
 
@@ -624,7 +737,11 @@ class _DummyEnv(VecEnv):
         super().__init__(
             num_envs=1,
             observation_space=observation_space(layout),
-            action_space=spaces.Discrete(len(layout.actions)),
+            # The trainer's own action space. With `Discrete` here SB3 would
+            # build a categorical head, `_FieldDirection` would feed it two
+            # numbers as nine logits, and every test through this env would
+            # pass while exercising a policy that is never built.
+            action_space=action_space(layout),
         )
 
     def get_attr(self, attr_name, indices=None):

@@ -8,6 +8,7 @@ ending exactly on the second.
 
 from __future__ import annotations
 
+import math
 import io
 import json
 
@@ -140,6 +141,10 @@ def make_env(layout: Layout, *, envs: int = 2, width: int = 8, rewards=None):
 # --- done, truncation, and which observation is which --------------------
 
 
+#: Two envs told to stand still. A direction, because the action space is one.
+STILL = np.zeros((2, 2), dtype=np.float32)
+
+
 def test_done_is_terminated_or_truncated(layout):
     env, gym = make_env(layout)
     cases = [
@@ -152,7 +157,7 @@ def test_done_is_terminated_or_truncated(layout):
         gym.queue.append(
             batch_of([transition, running()], width=8, terminal={0: 7.0} if expected else None)
         )
-        env.step_async(np.array([0, 0]))
+        env.step_async(STILL)
         _, _, dones, _ = env.step_wait()
         assert bool(dones[0]) is expected, transition
     env.close()
@@ -179,7 +184,7 @@ def test_time_limit_truncated_is_truncation_without_death(layout):
                 terminal={0: 7.0},
             )
         )
-        env.step_async(np.array([0, 0]))
+        env.step_async(STILL)
         _, _, _, infos = env.step_wait()
         assert infos[0]["TimeLimit.truncated"] is expected, (terminated, truncated)
     env.close()
@@ -189,7 +194,7 @@ def test_a_live_transition_carries_no_terminal_observation(layout):
     """SB3 reads that key as "this episode ended"; a stale one ends a live one."""
     env, gym = make_env(layout)
     gym.queue.append(batch_of([running(), running()], width=8, terminal={}))
-    env.step_async(np.array([0, 0]))
+    env.step_async(STILL)
     _, _, dones, infos = env.step_wait()
     for info, done in zip(infos, dones):
         assert not done
@@ -215,7 +220,7 @@ def test_the_batch_observation_is_the_reset_episode_and_the_info_is_the_finished
             terminal={0: 9.0},  # the episode that ended
         )
     )
-    env.step_async(np.array([0, 0]))
+    env.step_async(STILL)
     obs, _, dones, infos = env.step_wait()
 
     assert dones[0]
@@ -235,7 +240,7 @@ def test_a_finished_episodes_metadata_is_not_the_replacements(layout):
             terminal={0: 1.0},
         )
     )
-    env.step_async(np.array([0, 0]))
+    env.step_async(STILL)
     _, _, _, infos = env.step_wait()
     assert infos[0]["frames"] == 137, "not the new episode's zero"
     assert infos[0]["run_over"] is True
@@ -282,6 +287,143 @@ def test_enemy_kills_earn_the_uncontrolled_share():
     assert got == pytest.approx(0.02 + 0.05 * 0.5 * 4)
 
 
+# --- the turn penalty ----------------------------------------------------
+
+
+def turning(**overrides) -> Rewards:
+    return Rewards(
+        survival_per_frame=0.0, death_penalty=0.0, uncontrolled_score_weight=0.0,
+        **overrides,
+    )
+
+
+RIGHT = (1.0, 0.0)
+
+
+def heading(degrees: float) -> tuple[float, float]:
+    return (math.cos(math.radians(degrees)), math.sin(math.radians(degrees)))
+
+
+@pytest.mark.parametrize("degrees", [0.0, 15.0, 44.9, -44.9])
+def test_a_turn_inside_the_free_angle_costs_nothing(degrees):
+    """Forty-five degrees is one step around the compass the nine candidate
+    paths are drawn on, so moving to an adjacent heading is free."""
+    assert turning().turn_cost(RIGHT, heading(degrees)) == 0.0
+
+
+def test_the_cost_rises_with_the_angle_rather_than_switching_on():
+    """A step charge would make forty-six degrees as expensive as a full
+    reversal, and the agent would learn that once a turn is worth paying for
+    it may as well be the biggest one available."""
+    costs = [turning().turn_cost(RIGHT, heading(d)) for d in (50, 90, 135, 180)]
+    assert all(b > a for a, b in zip(costs, costs[1:])), costs
+    assert costs[0] < 0.1 * costs[-1], "just past the threshold is nearly free"
+
+
+def test_a_full_reversal_costs_the_whole_penalty():
+    assert turning().turn_cost(RIGHT, (-1.0, 0.0)) == pytest.approx(0.01)
+
+
+def test_the_penalty_is_small_against_what_a_decision_earns():
+    """It shades between headings that are otherwise equally safe. It must
+    never argue with staying alive: a dodge that needs a reversal should still
+    be worth making."""
+    rewards = Rewards()
+    decision = rewards.survival_per_frame * 24  # one hold's worth of survival
+    assert rewards.turn_cost(RIGHT, (-1.0, 0.0)) < 0.05 * decision
+
+
+def test_turning_left_and_right_cost_the_same():
+    left = turning().turn_cost(RIGHT, heading(90.0))
+    right = turning().turn_cost(RIGHT, heading(-90.0))
+    assert left == pytest.approx(right)
+
+
+def test_a_longer_command_does_not_turn_further():
+    """Only the heading is charged. Length sets no speed and buys no turn."""
+    short = turning().turn_cost(RIGHT, heading(90.0))
+    long = turning().turn_cost((5.0, 0.0), (0.0, 50.0))
+    assert short == pytest.approx(long)
+
+
+def test_starting_and_stopping_are_not_turns():
+    """Neither has two headings to be between, and charging for them would
+    tax standing still -- the decision the idle floor exists to allow."""
+    assert turning().turn_cost((0.0, 0.0), RIGHT) == 0.0
+    assert turning().turn_cost(RIGHT, (0.0, 0.0)) == 0.0
+    assert turning().turn_cost((0.0, 0.0), (0.0, 0.0)) == 0.0
+
+
+def test_turning_can_be_switched_off_entirely():
+    assert turning(turn_penalty=0.0).turn_cost(RIGHT, (-1.0, 0.0)) == 0.0
+
+
+def test_the_free_angle_is_configurable():
+    strict = turning(turn_free_degrees=0.0)
+    assert strict.turn_cost(RIGHT, heading(90.0)) == pytest.approx(0.01 * 0.5)
+
+
+def test_the_step_reward_charges_the_turn(layout):
+    """Through `for_step`, not only through `turn_cost`: the wiring is the
+    part that can silently go missing."""
+    rewards = Rewards(survival_per_frame=0.02, death_penalty=0.0,
+                      uncontrolled_score_weight=0.0)
+    straight = rewards.for_step(
+        terminated=False, truncated=False, enemy_deaths=0,
+        previous_direction=RIGHT, direction=RIGHT,
+    )
+    reversed_ = rewards.for_step(
+        terminated=False, truncated=False, enemy_deaths=0,
+        previous_direction=RIGHT, direction=(-1.0, 0.0),
+    )
+    assert straight == pytest.approx(0.02)
+    assert reversed_ == pytest.approx(0.02 - 0.01)
+
+
+def test_the_env_charges_a_reversal_between_consecutive_steps(layout):
+    """End to end: the env remembers the heading it last sent."""
+    rewards = Rewards(survival_per_frame=0.0, death_penalty=0.0,
+                      uncontrolled_score_weight=0.0)
+    env, gym = make_env(layout, rewards=rewards)
+
+    gym.queue.append(batch_of([running(), running()], width=8))
+    env.step_async(np.array([[1.0, 0.0], [1.0, 0.0]], dtype=np.float32))
+    _, first, _, _ = env.step_wait()
+    assert first == pytest.approx([0.0, 0.0]), "the first heading turns from nothing"
+
+    gym.queue.append(batch_of([running(frame=2), running(frame=2)], width=8))
+    env.step_async(np.array([[-1.0, 0.0], [1.0, 0.0]], dtype=np.float32))
+    _, second, _, _ = env.step_wait()
+    assert second[0] == pytest.approx(-0.01), "env 0 reversed"
+    assert second[1] == pytest.approx(0.0), "env 1 held its heading"
+    env.close()
+
+
+def test_a_new_episode_does_not_inherit_the_dead_ones_heading(layout):
+    """The first move of a life is not a turn, and charging it for one would
+    make death quietly more expensive than the death penalty says."""
+    rewards = Rewards(survival_per_frame=0.0, death_penalty=0.0,
+                      uncontrolled_score_weight=0.0)
+    env, gym = make_env(layout, rewards=rewards)
+
+    gym.queue.append(batch_of([running(), running()], width=8))
+    env.step_async(np.array([[1.0, 0.0], [1.0, 0.0]], dtype=np.float32))
+    env.step_wait()
+
+    dead = finished(frame=2, terminated=True, truncated=False)
+    gym.queue.append(batch_of([dead, running(frame=2)], width=8))
+    env.step_async(np.array([[1.0, 0.0], [1.0, 0.0]], dtype=np.float32))
+    env.step_wait()
+
+    # Env 0 restarted; its next heading turns from nothing however sharp it is.
+    gym.queue.append(batch_of([running(), running(frame=3)], width=8))
+    env.step_async(np.array([[-1.0, 0.0], [-1.0, 0.0]], dtype=np.float32))
+    _, rewards_now, _, _ = env.step_wait()
+    assert rewards_now[0] == pytest.approx(0.0), "a fresh episode has no heading to turn from"
+    assert rewards_now[1] == pytest.approx(-0.01), "its neighbour did reverse"
+    env.close()
+
+
 def test_reward_is_counted_once_per_step_and_never_for_a_reset(layout):
     """A reset produces no transition, so it can earn nothing.
 
@@ -294,7 +436,7 @@ def test_reward_is_counted_once_per_step_and_never_for_a_reset(layout):
     total = 0.0
     for frame in range(1, 13):
         gym.queue.append(batch_of([running(frame=frame), running(frame=frame)], width=8))
-        env.step_async(np.array([0, 0]))
+        env.step_async(STILL)
         _, step_rewards, _, _ = env.step_wait()
         total += float(step_rewards[0])
         env.reset()  # between every step; a reset must add nothing
@@ -354,11 +496,11 @@ def test_a_neighbours_reset_does_not_disturb_a_surviving_env(manifest, layout):
                 width=width,
             )
         )
-        env.step_async(np.array([0, 0]))
+        env.step_async(STILL)
         env.step_wait()
 
     gym.queue.append(real)
-    env.step_async(np.array([0, 0]))
+    env.step_async(STILL)
     obs, rewards, dones, infos = env.step_wait()
 
     assert dones[dead_env] and not dones[live_env]
@@ -396,7 +538,7 @@ def test_the_survivors_episode_keeps_accumulating_across_a_neighbours_death(layo
 
     for frame in (1, 2, 3):
         gym.queue.append(batch_of([running(frame=frame), running(frame=frame)], width=8))
-        env.step_async(np.array([0, 0]))
+        env.step_async(STILL)
         env.step_wait()
 
     gym.queue.append(
@@ -406,7 +548,7 @@ def test_the_survivors_episode_keeps_accumulating_across_a_neighbours_death(layo
             terminal={0: 3.0},
         )
     )
-    env.step_async(np.array([0, 0]))
+    env.step_async(STILL)
     _, _, _, infos = env.step_wait()
     assert infos[0]["episode"]["r"] == pytest.approx(3.0), (
         "three surviving frames; the fatal fourth earns no survival"
@@ -421,7 +563,7 @@ def test_the_survivors_episode_keeps_accumulating_across_a_neighbours_death(layo
             terminal={1: 3.0},
         )
     )
-    env.step_async(np.array([0, 0]))
+    env.step_async(STILL)
     _, _, _, infos = env.step_wait()
     assert infos[1]["frames"] == 5, "the survivor's episode was never reset"
     assert infos[1]["episode"]["r"] == pytest.approx(5.0)
@@ -458,7 +600,7 @@ def test_a_sixty_frame_episode_charts_as_one_second(layout):
                 terminal={0: 5.0} if last else None,
             )
         )
-        env.step_async(np.array([0, 0]))
+        env.step_async(STILL)
         _, _, _, infos = env.step_wait()
         if "episode_summary" in infos[0]:
             log.record(infos[0]["episode_summary"])
@@ -486,7 +628,7 @@ def test_per_step_events_are_not_running_totals(layout):
         gym.queue.append(
             batch_of([running(frame=frame, deaths=2), running(frame=frame)], width=8)
         )
-        env.step_async(np.array([0, 0]))
+        env.step_async(STILL)
         _, _, _, infos = env.step_wait()
         assert infos[0]["training_events"]["enemies_destroyed"] == 2, "this step, not so far"
         assert infos[0]["training_events"]["survival_frames"] == 1
@@ -510,10 +652,15 @@ def test_the_spaces_come_from_the_layout(manifest, layout):
     assert np.all(space.high[grid.offset : grid.stop] == 1.0)
 
 
-def test_the_action_space_is_the_nine_actions(layout):
+def test_the_action_space_is_a_direction_not_a_choice_of_nine(layout):
     env, _ = make_env(layout)
-    assert isinstance(env.action_space, spaces.Discrete)
-    assert env.action_space.n == len(layout.actions) == 9
+    assert isinstance(env.action_space, spaces.Box)
+    assert env.action_space.shape == (2,)
+    assert env.action_space.dtype == np.float32
+    # The layout still names nine, because nine is how many candidate paths
+    # the observation carries for the field to score. They are no longer the
+    # actions the agent can take.
+    assert len(layout.actions) == 9
     env.close()
 
 
@@ -587,7 +734,7 @@ def test_reset_returns_frame_zero_and_clears_episode_tracking(layout):
     env, gym = make_env(layout, rewards=rewards)
     for frame in (1, 2, 3):
         gym.queue.append(batch_of([running(frame=frame), running(frame=frame)], width=8))
-        env.step_async(np.array([0, 0]))
+        env.step_async(STILL)
         env.step_wait()
 
     env.reset()
@@ -598,7 +745,7 @@ def test_reset_returns_frame_zero_and_clears_episode_tracking(layout):
             terminal={0: 1.0},
         )
     )
-    env.step_async(np.array([0, 0]))
+    env.step_async(STILL)
     _, _, _, infos = env.step_wait()
     assert infos[0]["episode"]["r"] == pytest.approx(0.0), "the pre-reset frames are gone"
     env.close()
@@ -606,22 +753,26 @@ def test_reset_returns_frame_zero_and_clears_episode_tracking(layout):
 
 def test_the_whole_action_batch_is_validated_before_anything_is_sent(layout):
     env, gym = make_env(layout)
-    with pytest.raises(ValueError, match="must be one of"):
-        env.step_async(np.array([0, 99]))
+    with pytest.raises(ValueError, match="must be finite"):
+        env.step_async(np.array([[0.0, 0.0], [np.nan, 0.0]]))
     assert gym.sent == [], "a refused batch must not reach the pipe"
 
-    with pytest.raises(ValueError, match="got 1 actions"):
-        env.step_async(np.array([0]))
+    with pytest.raises(ValueError, match="directions"):
+        env.step_async(np.array([[0.0, 0.0]]))
     assert gym.sent == []
     env.close()
 
 
-def test_actions_are_sent_as_the_protocols_bytes(layout):
+def test_directions_reach_the_gym_unchanged(layout):
+    """Nothing normalises, rounds or snaps on the way out. A heading between
+    two of the nine candidate paths is the whole point of the action space,
+    and it must survive the trip."""
     env, gym = make_env(layout)
     gym.queue.append(batch_of([running(), running()], width=8))
-    env.step_async(np.array([3, 8]))
+    sent = np.array([[0.966, 0.259], [-0.259, -0.966]], dtype=np.float32)
+    env.step_async(sent)
     env.step_wait()
-    assert gym.sent == [[3, 8]]
+    assert np.allclose(np.asarray(gym.sent[0], dtype=np.float32), sent)
     env.close()
 
 
@@ -650,7 +801,7 @@ def test_the_context_manager_closes(layout):
 def test_step_returns_arrays_of_the_shapes_sb3_expects(layout):
     env, gym = make_env(layout, envs=3, width=8)
     gym.queue.append(batch_of([running(), running(), running()], width=8))
-    obs, rewards, dones, infos = env.step(np.array([0, 1, 2]))
+    obs, rewards, dones, infos = env.step(np.zeros((3, 2), dtype=np.float32))
     assert obs.shape == (3, 8)
     assert rewards.shape == (3,) and rewards.dtype == np.float32
     assert dones.shape == (3,) and dones.dtype == bool
@@ -674,7 +825,7 @@ def test_sb3_can_wrap_this_env(layout):
             terminal={0: 4.0},
         )
     )
-    monitored.step_async(np.array([0, 0]))
+    monitored.step_async(STILL)
     _, _, dones, infos = monitored.step_wait()
     assert dones[0]
     # VecMonitor writes its own `episode` record over ours, counting steps
@@ -712,7 +863,7 @@ def test_a_live_env_runs_the_whole_lifecycle():
         assert first.shape == (2, env.layout.observation_values)
         seeded_first = list(env.episode_seeds)
         for _ in range(4):
-            env.step_async(np.array([2, 5]))
+            env.step_async(np.array([[0.966, 0.259], [-0.259, -0.966]]))
             obs, rewards, dones, infos = env.step_wait()
         assert all(dones), "a four-frame budget ends on the fourth step"
         for info in infos:

@@ -7,10 +7,15 @@ scale, hazards and the movement model all differ, so a Royale policy trains
 from scratch.
 
 The network's only output is a scalar danger per cell per time slice. It never
-chooses an action. Choosing is arithmetic: read the field along where each of
-the nine actions takes the player, and let the totals be the logits. Nothing
-about the controller is learned, so all the learning pressure lands on the
-field.
+chooses a direction. Choosing is arithmetic: read the field along each of the
+nine candidate paths, then blend those nine headings in proportion to how safe
+each one came back. Nothing about the controller is learned, so all the
+learning pressure lands on the field.
+
+The nine are candidates, not choices. The blend of them is a vector, so the
+agent travels on any heading -- and a small change in the field moves that
+heading a little, where picking the best of nine would have swung the whole
+action the instant two readings crossed.
 
 **What Royale changes, and why.**
 
@@ -272,7 +277,8 @@ class VelocityFlowRoyaleExtractor(BaseFeaturesExtractor):
     """Produce a danger field, then read it along each action's real path.
 
     Returns ``len(actions) + VALUE_FEATURES`` features: the negated danger per
-    action, which the policy turns into logits, followed by the critic's own.
+    candidate path, which the policy blends into a heading, followed by the
+    critic's own.
     """
 
     def __init__(self, observation_space, layout: Layout | dict) -> None:
@@ -382,5 +388,6 @@ class VelocityFlowRoyaleExtractor(BaseFeaturesExtractor):
         value = self.value_net(
             torch.cat((pooled, self.value_summary(trunk), player, senses), dim=1)
         )
-        # Negated: the controller prefers low danger, and these become logits.
+        # Negated: the controller prefers low danger, and these become the
+        # weights the nine candidate headings are blended by.
         return torch.cat((-danger, value), dim=1)

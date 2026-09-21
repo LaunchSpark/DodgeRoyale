@@ -55,8 +55,18 @@ def observation_space(layout: Layout) -> spaces.Box:
     return spaces.Box(low=low, high=high, dtype=np.float32)
 
 
-def action_space(layout: Layout) -> spaces.Discrete:
-    return spaces.Discrete(len(layout.actions))
+def action_space(_layout: Layout) -> spaces.Box:
+    """A direction, not a choice between nine of them.
+
+    The layout still names nine actions, because nine is how many candidate
+    paths the observation carries for the field to score. What the agent sends
+    back is no longer one of them: it is a heading, and any heading is
+    reachable. Bounded at the unit square because that is where a policy's
+    output is clipped, not because longer would mean faster -- length sets no
+    speed, and a direction shorter than the simulation's idle floor is a
+    decision to stand still.
+    """
+    return spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
 
 class RoyaleVecEnv(VecEnv):
@@ -95,6 +105,10 @@ class RoyaleVecEnv(VecEnv):
         self._seeds_now = list(self._client.initial.seeds)
         self._trackers = [EpisodeTracker() for _ in range(self._client.envs)]
         self._pending: np.ndarray | None = None
+        # The heading each env is travelling on, for the turn penalty. Zero is
+        # "no heading yet", which is what the first decision of an episode
+        # turns from -- that is, nothing.
+        self._previous_direction = np.zeros((self._client.envs, 2), dtype=np.float32)
         #: A seed asked for before the next reset, applied there and cleared.
         self._deferred_seed: int | None = None
 
@@ -122,34 +136,34 @@ class RoyaleVecEnv(VecEnv):
         for tracker in self._trackers:
             tracker.reset()
         self._pending = None
+        self._previous_direction[:] = 0.0
         self.reset_infos = [{"episode_seed": seed} for seed in batch.seeds]
         return self._observations
 
     def step_async(self, actions: np.ndarray) -> None:
-        """Hold the actions. The gym steps synchronously, in `step_wait`.
+        """Hold the directions. The gym steps synchronously, in `step_wait`.
 
         Validating here rather than there keeps a bad batch from being half
-        sent: the gym refuses a malformed STEP by ending the session, so an
-        action out of range must never reach the pipe.
+        sent: the gym refuses a malformed STEP by ending the session, so a
+        direction that is not a number must never reach the pipe.
         """
-        chosen = np.asarray(actions).reshape(-1)
-        if chosen.size != self.num_envs:
+        chosen = np.asarray(actions, dtype=np.float32).reshape(self.num_envs, -1)
+        if chosen.shape != (self.num_envs, 2):
             raise ValueError(
-                f"this env has {self.num_envs} envs, got {chosen.size} actions"
+                f"this env wants {self.num_envs} (x, y) directions, got {chosen.shape}"
             )
-        count = len(self.layout.actions)
-        if not np.all((chosen >= 0) & (chosen < count)):
-            raise ValueError(f"every action must be one of the {count} actions: {chosen}")
-        self._pending = chosen.astype(np.uint8, copy=True)
+        if not np.isfinite(chosen).all():
+            raise ValueError(f"every direction must be finite: {chosen}")
+        self._pending = chosen.copy()
 
     def step_wait(self) -> VecEnvStepReturn:
         if self._pending is None:
             raise RuntimeError("step_wait() without a step_async()")
         actions, self._pending = self._pending, None
         batch = self._client.step(actions.tolist())
-        return self._interpret(batch)
+        return self._interpret(batch, actions)
 
-    def _interpret(self, batch: StepBatch) -> VecEnvStepReturn:
+    def _interpret(self, batch: StepBatch, actions: np.ndarray) -> VecEnvStepReturn:
         """Turn one STEP response into what SB3 expects of a vector env."""
         rewards = np.zeros(self.num_envs, dtype=np.float32)
         dones = np.zeros(self.num_envs, dtype=bool)
@@ -160,6 +174,8 @@ class RoyaleVecEnv(VecEnv):
                 terminated=transition.terminated,
                 truncated=transition.truncated,
                 enemy_deaths=transition.enemy_deaths,
+                previous_direction=self._previous_direction[index],
+                direction=actions[index],
             )
             rewards[index] = reward
             dones[index] = transition.done
@@ -178,6 +194,13 @@ class RoyaleVecEnv(VecEnv):
         for index, transition in enumerate(batch.transitions):
             if transition.reset_seed is not None:
                 self._seeds_now[index] = transition.reset_seed
+        # The heading each env is now travelling on, for the next step's turn
+        # penalty. An env that finished starts its new episode with no heading
+        # to have turned from: the first move of a life is not a turn, and
+        # charging it for one would make death cheaper than it is.
+        self._previous_direction = np.where(
+            dones[:, None], 0.0, actions.astype(np.float32, copy=False)
+        )
         return self._observations, rewards, dones, infos
 
     def _info(

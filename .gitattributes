@@ -5,5 +5,5 @@
 # Golden protocol fixtures are compared byte for byte by two languages, so
 # nothing may normalise them. The auto heuristic would almost certainly call
 # these binary anyway; "almost certainly" is not a guarantee worth relying on.
-tests/fixtures/gym-v1/*.bin binary
-tests/fixtures/gym-v1/manifest.json text eol=lf
+tests/fixtures/gym-v2/*.bin binary
+tests/fixtures/gym-v2/manifest.json text eol=lf

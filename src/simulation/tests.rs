@@ -934,13 +934,71 @@ fn action_bytes_are_the_protocol_order() {
 }
 
 #[test]
-fn an_action_outside_the_table_is_rejected_rather_than_idled() {
+fn an_action_that_is_not_finite_is_rejected_rather_than_idled() {
     let mut arena = empty_arena(60);
-    assert_eq!(
-        arena.set_action(9).err(),
-        Some(ArenaError::InvalidAction(9))
+    assert!(arena.set_action(Vec2::new(f32::NAN, 0.0)).is_err());
+    assert!(
+        arena.set_action(Vec2::new(0.3, -0.9)).is_ok(),
+        "any heading"
     );
-    assert!(arena.set_action(8).is_ok(), "the ninth action is valid");
+}
+
+#[test]
+fn a_command_shorter_than_the_idle_floor_means_standing_still() {
+    // The nine candidate paths include idle, so an agent that finds every
+    // direction equally dangerous blends to near zero. Read as a heading that
+    // would be noise at full speed, which is the twitch this floor removes.
+    assert_eq!(intent_from_command(Vec2::ZERO), Vec2::ZERO);
+    assert_eq!(
+        intent_from_command(Vec2::new(IDLE_THRESHOLD * 0.99, 0.0)),
+        Vec2::ZERO
+    );
+    let moving = Vec2::new(IDLE_THRESHOLD * 1.01, 0.0);
+    assert_eq!(intent_from_command(moving), moving, "and is passed through");
+}
+
+#[test]
+fn a_commands_length_does_not_change_where_it_goes() {
+    // Direction only: length is not speed, so a long and a short command with
+    // the same heading must arrive at the same place.
+    let heading = Vec2::new(0.6, -0.8);
+    let mut short = empty_arena(60);
+    let mut long = empty_arena(60);
+    for _ in 0..20 {
+        short.set_action(heading).expect("a heading");
+        long.set_action(heading * 50.0).expect("the same heading");
+        short.step().expect("a step");
+        long.step().expect("a step");
+    }
+    let (short, long) = (short.view(), long.view());
+    let (short, long) = (
+        short.player.expect("a player"),
+        long.player.expect("a player"),
+    );
+    assert!(
+        short.position.abs_diff_eq(long.position, 0.001),
+        "{} against {}",
+        short.position,
+        long.position
+    );
+}
+
+#[test]
+fn any_heading_is_reachable_not_just_the_nine() {
+    // The point of version 2. A direction between two compass headings must
+    // actually travel between them, rather than snapping to the nearer one.
+    let mut between = empty_arena(60);
+    let heading = Vec2::from_angle(20_f32.to_radians());
+    for _ in 0..30 {
+        between.set_action(heading).expect("a heading");
+        between.step().expect("a step");
+    }
+    let moved = between.view().player.expect("a player").position;
+    let angle = moved.y.atan2(moved.x).to_degrees();
+    assert!(
+        (angle - 20.0).abs() < 1.0,
+        "travelled at {angle} degrees, not 20"
+    );
 }
 
 #[test]

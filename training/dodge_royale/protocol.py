@@ -1,6 +1,6 @@
 """Client for the DodgeRoyale gym protocol, version 1.
 
-Speaks the format frozen in ``docs/superpowers/specs/velocity-flow-royale-protocol-v1.md``
+Speaks the format frozen in ``docs/superpowers/specs/velocity-flow-royale-protocol-v2.md``
 and implemented by ``src/gym/protocol.rs``. Nothing here knows about SB3,
 Gymnasium or PyTorch: this module launches the gym, reads messages, and hands
 back NumPy arrays. Training semantics belong a layer up, in the vector
@@ -10,7 +10,7 @@ Two entry points, on purpose:
 
 ``decode_*``
     Pure functions over bytes. They are what the committed fixtures in
-    ``tests/fixtures/gym-v1/`` are read with, so the wire format can be tested
+    ``tests/fixtures/gym-v2/`` are read with, so the wire format can be tested
     with no Rust toolchain, no build and no child process.
 
 :class:`GymClient`
@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import os
 import platform
 import struct
@@ -42,6 +43,7 @@ import numpy as np
 
 __all__ = [
     "ACTIONS",
+    "ACTION_DIRECTIONS",
     "MAGIC",
     "PROTOCOL_VERSION",
     "GymClient",
@@ -58,8 +60,8 @@ __all__ = [
     "find_binary",
 ]
 
-MAGIC: Final = b"DRGYM\x00\x00\x01"
-PROTOCOL_VERSION: Final = 1
+MAGIC: Final = b"DRGYM\x00\x00\x02"
+PROTOCOL_VERSION: Final = 2
 
 # Request opcodes.
 _REQ_STEP: Final = 0x01
@@ -85,6 +87,27 @@ ACTIONS: Final = (
     "down-right",
 )
 
+#: The heading each candidate path was predicted along, in world coordinates
+#: with +y up. The names are no longer the actions the agent can take -- it
+#: sends a direction now -- but they are still the nine paths the observation
+#: carries and the field scores, so something has to say which way each one
+#: points. This is that, and it is the only place the mapping is written down.
+#:
+#: Not normalised here: these are the literals the simulation uses, and a
+#: diagonal is `(1, 1)` there. Anything blending them must normalise first, or
+#: a diagonal arrives weighing half again as much as an axis.
+ACTION_DIRECTIONS: Final = {
+    "idle": (0.0, 0.0),
+    "left": (-1.0, 0.0),
+    "right": (1.0, 0.0),
+    "up": (0.0, 1.0),
+    "down": (0.0, -1.0),
+    "up-left": (-1.0, 1.0),
+    "up-right": (1.0, 1.0),
+    "down-left": (-1.0, -1.0),
+    "down-right": (1.0, -1.0),
+}
+
 # Longest ERROR message the server will send, per the spec.
 _ERROR_MESSAGE_CAP: Final = 1024
 
@@ -97,7 +120,7 @@ READ_BUFFER_BYTES: Final = 1024 * 1024
 
 
 class ProtocolError(Exception):
-    """The bytes on the wire were not what protocol v1 says they should be."""
+    """The bytes on the wire were not what protocol v2 says they should be."""
 
 
 class GymError(Exception):
@@ -575,17 +598,37 @@ def decode_reset(stream: BinaryIO, envs: int, observation_values: int) -> ResetB
 # --- writing requests ---------------------------------------------------
 
 
-def encode_step(actions: Sequence[int]) -> bytes:
-    """A STEP request: one action byte per env, in env order."""
-    payload = bytes(_checked_action(action) for action in actions)
-    return bytes([_REQ_STEP]) + struct.pack("<I", len(payload)) + payload
+def encode_step(actions: Sequence[Sequence[float]]) -> bytes:
+    """A STEP request: one direction per env, in env order.
+
+    The length prefix counts envs rather than floats, so a payload that lost
+    half its bytes is a length error on the far side instead of half a batch of
+    plausible directions applied to the wrong arenas.
+
+    A direction's length does not set speed -- only its heading is read -- so
+    nothing is normalised here. A direction shorter than the simulation's idle
+    floor means standing still, which is a decision and not an error.
+    """
+    rows = [_checked_direction(action) for action in actions]
+    values = [value for row in rows for value in row]
+    payload = struct.pack(f"<{len(values)}f", *values)
+    return bytes([_REQ_STEP]) + struct.pack("<I", len(rows)) + payload
 
 
-def _checked_action(action: int) -> int:
-    value = int(action)
-    if not 0 <= value < len(ACTIONS):
-        raise ValueError(f"action {value} is not one of the {len(ACTIONS)} actions")
-    return value
+def _checked_direction(action: Sequence[float]) -> tuple[float, float]:
+    """One action as a finite (x, y) pair.
+
+    Refused rather than repaired: a NaN would reach the player's position in
+    the arena and from there every value of every observation it produces, and
+    a caller that produced one has a bug worth hearing about.
+    """
+    try:
+        x, y = (float(value) for value in action)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"an action is an (x, y) direction, got {action!r}") from error
+    if not (math.isfinite(x) and math.isfinite(y)):
+        raise ValueError(f"the direction ({x}, {y}) is not finite")
+    return x, y
 
 
 def encode_reset(seed: int | None) -> bytes:
@@ -799,8 +842,8 @@ class GymClient:
 
     # -- the protocol --
 
-    def step(self, actions: Sequence[int] | Iterable[int]) -> StepBatch:
-        """Advance every env one frame."""
+    def step(self, actions: Sequence[Sequence[float]] | Iterable[Sequence[float]]) -> StepBatch:
+        """Advance every env one frame, on one direction each."""
         chosen = list(actions)
         if len(chosen) != self.envs:
             raise ValueError(f"this session has {self.envs} envs, got {len(chosen)} actions")

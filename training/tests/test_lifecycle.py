@@ -170,7 +170,7 @@ def test_sending_to_a_closed_session_is_refused_rather_than_hanging():
     client = FakeClient(stand_in("import sys; sys.stdin.read()"))
     client.close()
     with pytest.raises(GymError, match="closed"):
-        client.step([0])
+        client.step([(0.0, 0.0)])
 
 
 def test_a_child_that_has_gone_away_reports_its_exit_code():
@@ -246,12 +246,12 @@ def test_a_live_session_hands_shakes_steps_and_closes():
         assert gym.handshake.root_seed == 7
         assert gym.initial.observations.shape == (2, gym.layout.observation_values)
 
-        batch = gym.step([2, 5])
+        batch = gym.step([(0.966, 0.259), (-0.259, -0.966)])
         assert batch.transitions[0].frame == 1
         assert batch.observations.shape == (2, gym.layout.observation_values)
 
         kept = batch.observations.copy()
-        gym.step([0, 0])
+        gym.step([(0.0, 0.0), (0.0, 0.0)])
         assert (batch.observations == kept).all(), "a retained observation changed"
     assert gym.returncode == 0, "a closed session exits cleanly"
 
@@ -261,7 +261,7 @@ def test_a_live_session_hands_shakes_steps_and_closes():
 def test_a_live_seeded_reset_reproduces_frame_zero():
     with GymClient(envs=2, seed=7, enemies=12, max_frames=64, threads=1) as gym:
         first = gym.initial
-        gym.step([1, 1])
+        gym.step([(0.966, 0.259), (0.966, 0.259)])
         again = gym.reset(7)
         assert again.seeds == first.seeds
         assert (again.observations == first.observations).all()
@@ -272,7 +272,7 @@ def test_a_live_seeded_reset_reproduces_frame_zero():
 def test_a_live_budget_produces_a_terminal_observation():
     with GymClient(envs=2, seed=7, enemies=12, max_frames=3, threads=1) as gym:
         for _ in range(3):
-            batch = gym.step([0, 0])
+            batch = gym.step([(0.0, 0.0), (0.0, 0.0)])
         assert all(t.truncated for t in batch.transitions)
         assert sorted(batch.terminal) == [0, 1]
         for transition in batch.transitions:

@@ -1,4 +1,4 @@
-# Golden fixtures, gym protocol v1
+# Golden fixtures, gym protocol v2
 
 Real protocol bytes, committed, so the Python client can be tested without a
 Rust toolchain, a build, or a running gym. Nothing here is generated at test
@@ -14,6 +14,17 @@ cargo run --locked --no-default-features --example gym_fixtures
 That rewrites every file here. It is a maintenance action, not a test step —
 see [`examples/gym_fixtures.rs`](../../../examples/gym_fixtures.rs).
 
+## What changed from v1
+
+Version 2 replaced the action byte per env in a STEP **request** with a
+direction vector per env, so the agent moves on any heading rather than one of
+nine. Every message captured here is a **response**, and responses did not
+change: the only different byte in this directory is the version in
+`handshake.bin`. The v1 captures were removed rather than kept, because a
+fixture set that no build can produce or read is a trap rather than a record —
+the hand-written wire images in `src/gym/protocol/tests.rs` are what pin the
+request format, and they now pin v2's.
+
 ## Files
 
 | File | Message | What it is for |
@@ -26,9 +37,12 @@ see [`examples/gym_fixtures.rs`](../../../examples/gym_fixtures.rs).
 | `scenes.bin` | `0x82` | Three hand-placed arenas that pin the encoder's axes, signs and wrapping. |
 
 The first four come from a real `ArenaBatch` at root seed 7, so they are
-exactly what the server sends. `scenes.bin` is encoded from arenas built by
-hand, because a real episode cannot be relied on to contain a half-grown blast
-or a hazard straddling the seam on any chosen frame:
+exactly what the server sends. The two envs are stepped on headings of 15° and
+255° — deliberately off the old nine-way compass, so a server that quietly
+snapped a direction to the nearest of the nine would move the players somewhere
+else and change every observation here. `scenes.bin` is encoded from arenas
+built by hand, because a real episode cannot be relied on to contain a
+half-grown blast or a hazard straddling the seam on any chosen frame:
 
 * **env 0** — asymmetric positions and moving hazards. No two hazards share an
   offset, a size or a velocity, so a decoder that transposes or flips an axis
@@ -41,9 +55,9 @@ or a hazard straddling the seam on any chosen frame:
   pixels away. A decoder that subtracts positions sees an empty window.
 
 The death fixture uses root seed 31 with 100 enemies, including one initial
-window-edge enemy. It remains a mixed batch. These captures describe the simulation
-revision that emitted them; gameplay changes can change their values without
-changing protocol v1.
+window-edge enemy. It remains a mixed batch. These captures describe the
+simulation revision that emitted them; gameplay changes can change their values
+without changing protocol v2.
 
 ## Comparing values
 

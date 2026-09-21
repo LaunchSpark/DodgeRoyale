@@ -35,10 +35,19 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use bevy::math::Vec2;
 use dodge_royale::gym::protocol::{EnvTransition, StepBatch, max_payload, read_step, write_step};
 use dodge_royale::gym::workers::{ArenaBatch, BatchConfig};
 use dodge_royale::observation::{OBSERVATION_VALUES, encode};
 use dodge_royale::simulation::{ArenaConfig, DEFAULT_HOLD_FRAMES, HeadlessArena};
+
+/// A heading that sweeps around the circle, so the benchmark measures the
+/// continuous directions a policy sends rather than nine special cases.
+fn heading(step: u32) -> Vec2 {
+    let degrees = f32::from(u16::try_from(step.wrapping_mul(37) % 360).unwrap_or(0));
+    let radians = degrees.to_radians();
+    Vec2::new(radians.cos(), radians.sin())
+}
 
 /// The two sizes the design names: the training default and the stress case.
 const ENV_COUNTS: [u32; 2] = [8, 64];
@@ -141,11 +150,12 @@ fn measure_single_env(config: ArenaConfig) -> SingleEnv {
                 .reset(u64::from(frame))
                 .expect("a fresh episode fills too");
         }
-        // Cycling the action keeps the player moving, so the measured frames
-        // are ordinary play rather than a corner the enemies have lost track of.
+        // Sweeping the heading keeps the player moving, so the measured
+        // frames are ordinary play rather than a corner the enemies have lost
+        // track of.
         arena
-            .set_action(u8::try_from(frame % 9).unwrap_or(0))
-            .expect("a cycled action is one of the nine");
+            .set_action(heading(frame))
+            .expect("a swept heading is finite");
 
         let started = Instant::now();
         arena.step().expect("a live episode steps");
@@ -286,9 +296,7 @@ fn measure_batch(envs: u32, workers: u32, config: ArenaConfig) -> Duration {
     })
     .expect("every arena fills its population");
 
-    let actions: Vec<u8> = (0..envs)
-        .map(|env| u8::try_from(env % 9).unwrap_or(0))
-        .collect();
+    let actions: Vec<Vec2> = (0..envs).map(heading).collect();
     for _ in 0..WARMUP {
         batch.step(&actions).expect("a batch steps");
     }

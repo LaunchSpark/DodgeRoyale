@@ -24,8 +24,10 @@ scratch.
 
 ### Out of scope
 
-* **In-game autopilot** (weight export, a Rust forward pass, a toggle key,
-  parity tests against PyTorch). Its own spec, written after a policy trains.
+* **Standalone in-game autopilot** (weight export, a Rust forward pass, a toggle
+  key, parity tests against PyTorch). The dashboard's browser watch mode uses a
+  local Python policy service to control the real web game; offline/native
+  inference remains its own spec.
 * Difficulty, powerups, pickups, score and pattern hazards. DodgeRoyale does
   not have them; their observation channels are not reserved either, because
   training starts fresh.
@@ -105,7 +107,7 @@ themes, the config screen.
   budgets. Replacements follow ordinary placement. Graphical and headless games
   use the same initializer; frame zero has zero velocities and no elapsed gameplay.
   There is no velocity burst or forced steering. Seeded trajectories change with
-  the rule; observation layout and protocol v1 do not.
+  the rule; observation layout and protocol v2 do not.
 
 ### 3.3 `ArenaView`
 
@@ -203,7 +205,9 @@ flushed after every response; all logs go to stderr.
 1. **Handshake (Rust -> Python):** magic, protocol version, `n_envs`, grid
    size, cell size, channel list and semantics, `n_actions`, horizons,
    `hold_frames`, `obs_len`.
-2. **`STEP`:** one action byte per env; each env advances exactly one frame.
+2. **`STEP`:** one direction vector per env; each env advances exactly one
+   frame. Length is not speed; a direction under the idle floor is standing
+   still.
    Response: observations, then per env `terminated`, `truncated`,
    `enemy_deaths`, seed; then terminal observations for finished envs.
 3. **`RESET(seed)`** resets every env. **`CLOSE`** exits.
@@ -308,7 +312,7 @@ PICO-8 runtime, cartridges, old checkpoints, and unrelated architectures.
 Royale checkpoints use stable `dodge_royale` module paths from their first save.
 
 Both languages consume committed golden fixtures from root
-`tests/fixtures/gym-v1/`: Rust-generated `.bin` messages and a JSON manifest of
+`tests/fixtures/gym-v2/`: Rust-generated `.bin` messages and a JSON manifest of
 seed/config, headers, shapes, and selected numeric values with offsets. Include
 asymmetric positions, moving hazards, blast phase, seam wrapping, and auto-reset
 with terminal observations. Python fixture tests need no Rust build; handwritten
@@ -387,8 +391,11 @@ Built from `Layout`, reusing v2's structure:
 * `python -m dodge_royale.train` builds `RoyaleVecEnv`.
 * `python -m dodge_royale.dashboard` uses the same local training session.
   Both entry points are Royale-only, with no `--game` switch. Game Config shows
-  enemy count, max frames and hold frames only. Watch Agent is disabled until
-  the autopilot spec.
+  enemy count, max frames and hold frames only. The browser Watch feature now
+  embeds the Bevy game, asks a local Python policy service for actions, and
+  draws the extractor's nearest-horizon danger field over the observation
+  window it came from, centred on the player. Standalone native/offline
+  autopilot remains outside this spec.
 * The root README links to `training/README.md` for setup and launch commands.
   CI builds Rust and tests Python from one revision. A clean checkout must train
   with DodgeAI absent; no external cart, model, fixture, or user settings required.

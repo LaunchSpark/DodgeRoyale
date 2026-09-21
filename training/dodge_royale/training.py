@@ -195,7 +195,8 @@ def check_env(env: RoyaleVecEnv) -> None:
     if observations.dtype != np.float32:
         raise ValueError(f"observations must be float32, got {observations.dtype}")
 
-    actions = np.zeros(env.num_envs, dtype=np.int64)
+    # Standing still: a direction, because the action space is one.
+    actions = np.zeros((env.num_envs, 2), dtype=np.float32)
     stepped, rewards, dones, infos = env.step(actions)
     if stepped.shape != observations.shape:
         raise ValueError(f"step produced {stepped.shape}, expected {observations.shape}")
@@ -365,7 +366,7 @@ def describe(config: SessionConfig, layout: Layout | None = None) -> str:
         f"gamma          {architecture.gamma:.6f}",
         f"gae_lambda     {architecture.gae_lambda:.6f}",
         f"arena          {config.enemies} enemies, {config.max_frames} frame budget",
-        f"prediction     {config.hold_frames} frame hold (one action per frame)",
+        f"prediction     {config.hold_frames} frame hold (one direction per frame)",
         f"gym threads    {config.threads}",
     ]
     if layout is not None:

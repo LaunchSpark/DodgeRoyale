@@ -372,7 +372,27 @@ def test_a_terminal_observation_for_an_env_that_does_not_exist_is_refused():
 
 
 def test_a_step_request_is_bytes_we_can_write_out_by_hand():
-    assert encode_step([0, 8, 3]) == bytes([0x01, 3, 0, 0, 0, 0, 8, 3])
+    assert encode_step([(0.0, 0.0), (1.0, -0.5)]) == bytes(
+        [
+            0x01,  # STEP
+            2, 0, 0, 0,  # two envs, not two floats
+            0, 0, 0, 0,  # env 0 x = 0.0
+            0, 0, 0, 0,  # env 0 y = 0.0
+            0, 0, 0x80, 0x3F,  # env 1 x = 1.0
+            0, 0, 0, 0xBF,  # env 1 y = -0.5
+        ]
+    )
+
+
+def test_a_direction_is_written_as_little_endian_f32():
+    """Not a round number in binary: a server reading these bytes as anything
+    else would put the player on a different heading."""
+    direction = (0.123456789, -0.987654321)
+    written = encode_step([direction])[5:]
+    assert written == struct.pack("<2f", *direction)
+    assert struct.unpack("<2f", written) == struct.unpack(
+        "<2f", struct.pack("<2f", *direction)
+    )
 
 
 def test_a_reset_carries_a_presence_flag_so_seed_zero_stays_a_seed():
@@ -386,10 +406,26 @@ def test_a_close_is_one_byte():
     assert encode_close() == b"\x03"
 
 
-@pytest.mark.parametrize("action", [-1, 9, 255])
-def test_an_action_outside_the_nine_is_refused_before_it_is_sent(action):
-    with pytest.raises(ValueError, match="not one of"):
+@pytest.mark.parametrize(
+    "action", [(float("nan"), 0.0), (0.0, float("inf")), (float("-inf"), 0.0)]
+)
+def test_a_direction_that_is_not_finite_is_refused_before_it_is_sent(action):
+    """The gym answers a malformed STEP by ending the session, so a direction
+    that is not a number must never reach the pipe."""
+    with pytest.raises(ValueError, match="not finite"):
         encode_step([action])
+
+
+@pytest.mark.parametrize("action", [3, None, (1.0,), (1.0, 2.0, 3.0)])
+def test_an_action_that_is_not_a_pair_is_refused_before_it_is_sent(action):
+    with pytest.raises(ValueError, match="an .x, y. direction"):
+        encode_step([action])
+
+
+def test_a_long_direction_is_sent_rather_than_normalised():
+    """Length sets no speed, so nothing here rescales it. Normalising would
+    quietly discard the one thing a short vector says: stand still."""
+    assert encode_step([(3.0, 4.0)])[5:] == struct.pack("<2f", 3.0, 4.0)
 
 
 def test_the_payload_bound_admits_a_real_batch_and_refuses_far_more(manifest):

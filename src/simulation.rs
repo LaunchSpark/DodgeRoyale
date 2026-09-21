@@ -216,8 +216,6 @@ pub enum ArenaError {
     Population { placed: usize, requested: usize },
     /// The episode has already ended; reset before stepping again.
     Completed,
-    /// An action byte outside the nine actions.
-    InvalidAction(u8),
     /// A position, velocity or direction that is not a finite number.
     NonFinite(&'static str),
 }
@@ -231,9 +229,6 @@ impl core::fmt::Display for ArenaError {
                 "placed {placed} of {requested} enemies before frame zero"
             ),
             Self::Completed => write!(formatter, "the episode has ended; reset before stepping"),
-            Self::InvalidAction(byte) => {
-                write!(formatter, "action {byte} is outside the nine actions")
-            }
             Self::NonFinite(reason) => write!(formatter, "{reason}"),
         }
     }
@@ -524,34 +519,39 @@ impl HeadlessArena {
 
     /// The world this frame, in world units.
     pub fn view(&mut self) -> ArenaView {
-        let half_extents = self
-            .app
-            .world()
-            .resource::<EnemyWorld>()
-            .half_extents
-            .unwrap_or(WORLD_HALF_EXTENTS);
-        let blast_duration = self
-            .app
-            .world()
-            .resource::<KamikazeSettings>()
-            .blast_seconds;
-        let frame = self.frame;
-        let world = self.app.world_mut();
+        view_world(self.app.world_mut(), self.frame)
+    }
 
-        let player = world
-            .query_filtered::<(Entity, &Transform, &Velocity2d, &Collider), With<Player>>()
-            .iter(world)
-            .next()
-            .map(|(entity, transform, velocity, collider)| PlayerView {
-                entity,
-                position: transform.translation.truncate(),
-                velocity: velocity.0,
-                collider: *collider,
-            });
+    /// Direct world access, for tests that need a hazard in an exact place.
+    #[cfg(test)]
+    pub(crate) fn world_mut(&mut self) -> &mut World {
+        self.app.world_mut()
+    }
+}
 
-        // Dying enemies are excluded: they are removed this update and cannot
-        // kill anything, so an encoder that painted them would invent a threat.
-        let mut enemies: Vec<EnemyView> = world
+/// Read the same simulation snapshot from a headless or a graphical world.
+/// The policy must see the actual world it steers, including in the browser.
+pub fn view_world(world: &mut World, frame: u32) -> ArenaView {
+    let half_extents = world
+        .resource::<EnemyWorld>()
+        .half_extents
+        .unwrap_or(WORLD_HALF_EXTENTS);
+    let blast_duration = world.resource::<KamikazeSettings>().blast_seconds;
+
+    let player = world
+        .query_filtered::<(Entity, &Transform, &Velocity2d, &Collider), With<Player>>()
+        .iter(world)
+        .next()
+        .map(|(entity, transform, velocity, collider)| PlayerView {
+            entity,
+            position: transform.translation.truncate(),
+            velocity: velocity.0,
+            collider: *collider,
+        });
+
+    // Dying enemies are excluded: they are removed this update and cannot
+    // kill anything, so an encoder that painted them would invent a threat.
+    let mut enemies: Vec<EnemyView> = world
             .query_filtered::<(Entity, &EnemyKind, &Transform, &Velocity2d, &Collider), (With<Enemy>, Without<Dying>)>()
             .iter(world)
             .map(|(entity, kind, transform, velocity, collider)| EnemyView {
@@ -562,34 +562,27 @@ impl HeadlessArena {
                 collider: *collider,
             })
             .collect();
-        enemies.sort_unstable_by_key(|enemy| enemy.entity);
+    enemies.sort_unstable_by_key(|enemy| enemy.entity);
 
-        let mut blasts: Vec<BlastView> = world
-            .query::<(Entity, &KamikazeBlast, &Transform, &Collider)>()
-            .iter(world)
-            .map(|(entity, blast, transform, collider)| BlastView {
-                entity,
-                position: transform.translation.truncate(),
-                collider: *collider,
-                age: blast.age,
-                duration: blast_duration,
-            })
-            .collect();
-        blasts.sort_unstable_by_key(|blast| blast.entity);
+    let mut blasts: Vec<BlastView> = world
+        .query::<(Entity, &KamikazeBlast, &Transform, &Collider)>()
+        .iter(world)
+        .map(|(entity, blast, transform, collider)| BlastView {
+            entity,
+            position: transform.translation.truncate(),
+            collider: *collider,
+            age: blast.age,
+            duration: blast_duration,
+        })
+        .collect();
+    blasts.sort_unstable_by_key(|blast| blast.entity);
 
-        ArenaView {
-            frame,
-            player,
-            enemies,
-            blasts,
-            half_extents,
-        }
-    }
-
-    /// Direct world access, for tests that need a hazard in an exact place.
-    #[cfg(test)]
-    pub(crate) fn world_mut(&mut self) -> &mut World {
-        self.app.world_mut()
+    ArenaView {
+        frame,
+        player,
+        enemies,
+        blasts,
+        half_extents,
     }
 }
 
@@ -665,10 +658,45 @@ pub const HORIZON: u32 = 108;
 /// roughly the time to reach full speed.
 pub const DEFAULT_HOLD_FRAMES: u32 = 24;
 
-/// The nine button states the agent chooses between.
+/// Below this length a commanded direction means standing still.
 ///
-/// The order is the protocol's: it is what an action byte means, and what the
-/// policy's nine logits are indexed by. Never reorder it.
+/// The action is a direction and nothing else: its length does not set speed,
+/// so without a floor the shortest possible command still moves at full pelt.
+/// That matters because the nine candidate paths include idle, so a policy that
+/// finds every direction equally dangerous blends to a vector near zero -- and
+/// the heading of a vector formed by nearly cancelling opposites is noise. A
+/// short command would then be read as "sprint whichever way the noise fell",
+/// which is the twitch, and at exactly the moment the agent is least sure.
+/// Below the floor the command is what it was trying to say: nowhere.
+///
+/// It is also the only way to stand still at all once the action is continuous.
+/// A Gaussian never samples exactly zero, so an idle that had to be spelled
+/// `(0, 0)` would be an action the agent could never take.
+pub const IDLE_THRESHOLD: f32 = 0.2;
+
+/// A commanded direction as a player intent.
+///
+/// The one place a continuous action becomes movement, so the idle floor is
+/// applied once and every caller -- gym worker, browser autopilot -- gets the
+/// same rule rather than its own copy of it.
+#[must_use]
+pub fn intent_from_command(direction: Vec2) -> Vec2 {
+    if direction.length_squared() < IDLE_THRESHOLD * IDLE_THRESHOLD {
+        Vec2::ZERO
+    } else {
+        direction
+    }
+}
+
+/// The nine headings the observation predicts a path along.
+///
+/// Not the actions the agent can take -- it sends a direction, and any
+/// direction. These are the candidates the danger field scores, and blending
+/// them in proportion to how safe each is is how a heading between two of them
+/// is reached.
+///
+/// The order is the layout's: it is what the path section is indexed by, and
+/// what a policy's nine readings line up against. Never reorder it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
     Idle,
@@ -696,7 +724,7 @@ impl Action {
         Self::DownRight,
     ];
 
-    /// Read an action byte from the wire.
+    /// The candidate path at an index, or `None` past the ninth.
     #[must_use]
     pub const fn from_byte(byte: u8) -> Option<Self> {
         match byte {
@@ -810,16 +838,19 @@ pub fn predict_path(
 }
 
 impl HeadlessArena {
-    /// Ask for an action on the next step.
+    /// Ask for a heading on the next step.
+    ///
+    /// Any heading, not one of nine: the nine are the candidate paths the
+    /// observation carries, and what comes back is a direction. Its length is
+    /// not speed, and a direction shorter than [`IDLE_THRESHOLD`] is a
+    /// decision to stand still.
     ///
     /// # Errors
     ///
-    /// [`ArenaError::InvalidAction`] for a byte outside the nine actions,
+    /// [`ArenaError::NonFinite`] for a direction that is not a finite number,
     /// rather than silently idling.
-    pub fn set_action(&mut self, action: u8) -> Result<(), ArenaError> {
-        let action = Action::from_byte(action).ok_or(ArenaError::InvalidAction(action))?;
-        // Every action's direction is a literal, so this cannot fail.
-        self.set_intent(action.direction())
+    pub fn set_action(&mut self, direction: Vec2) -> Result<(), ArenaError> {
+        self.set_intent(intent_from_command(direction))
     }
 
     /// Every action's path from where the player is now.

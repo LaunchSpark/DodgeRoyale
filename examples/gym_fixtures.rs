@@ -1,4 +1,4 @@
-//! Emit the committed protocol-v1 fixtures under `tests/fixtures/gym-v1/`.
+//! Emit the committed protocol-v2 fixtures under `tests/fixtures/gym-v2/`.
 //!
 //! The fixtures exist so the Python client can be tested against real protocol
 //! bytes without a Rust toolchain, a build, or a running gym. They are checked
@@ -57,7 +57,7 @@ use dodge_royale::scale::{PIXEL, WORLD_HALF_EXTENTS};
 use dodge_royale::simulation::{ArenaView, BlastView, DEFAULT_HOLD_FRAMES, EnemyView, PlayerView};
 
 /// Where the fixtures live, relative to the manifest directory.
-const FIXTURE_DIR: &str = "tests/fixtures/gym-v1";
+const FIXTURE_DIR: &str = "tests/fixtures/gym-v2";
 
 /// The session the real-arena fixtures come from. Small on purpose: an
 /// observation is 115,128 bytes, so every extra env is another 115 KB in git.
@@ -151,7 +151,7 @@ fn emit_session(root: &Path, layout: &Layout) -> Result<Vec<Fixture>, Box<dyn co
     let mut running = None;
     let mut ended = None;
     for frame in 1..=SESSION.max_frames {
-        let stepped = batch.step(&[2, 5])?;
+        let stepped = batch.step(&[Vec2::new(0.966, 0.259), Vec2::new(-0.259, -0.966)])?;
         if frame == 1 {
             running = Some(stepped);
         } else if frame == SESSION.max_frames {
@@ -206,7 +206,7 @@ fn emit_death(root: &Path, layout: &Layout) -> Result<Fixture, Box<dyn core::err
 
     let mut killed = None;
     for _ in 0..hunted.max_frames {
-        let stepped = batch.step(&[0, 0])?;
+        let stepped = batch.step(&[Vec2::ZERO; 2])?;
         if stepped
             .transitions
             .iter()

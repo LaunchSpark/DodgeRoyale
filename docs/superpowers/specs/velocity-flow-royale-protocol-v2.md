@@ -1,9 +1,25 @@
-# DodgeRoyale gym protocol, version 1
+# DodgeRoyale gym protocol, version 2
 
 **Status:** frozen. Any change to a message's meaning bumps
 `PROTOCOL_VERSION` and this document together.
-**Implemented by:** `src/gym/protocol.rs` (Rust). The planned Python client is
-`training/dodge_royale/protocol.py` in this same repository.
+**Implemented by:** `src/gym/protocol.rs` (Rust) and
+`training/dodge_royale/protocol.py` (Python), in this same repository.
+
+## What changed from version 1
+
+One thing: a STEP request carried one action **byte** per env, naming one of
+nine compass headings. It now carries one direction **vector** per env, so the
+agent can travel on any heading rather than the nine.
+
+Nothing else moved. Every response is byte-for-byte what version 1 sent, the
+observation layout is unchanged, and the handshake differs only in the version
+it announces. The nine action names still appear in the layout, because the
+observation still carries nine velocity-conditioned candidate paths for a
+policy to score — they are the paths, not the choices.
+
+There is no negotiation and no compatibility mode. A version 1 client and a
+version 2 server disagree about the meaning of a STEP's bytes, so they refuse
+each other at the magic rather than at the first step.
 
 The trainer runs `dodge-royale gym` as a child process and speaks this protocol
 over its stdin and stdout. Stdout carries protocol bytes and nothing else;
@@ -25,8 +41,8 @@ The server writes, once, before anything else:
 
 | Field | Type | Value |
 |---|---|---|
-| magic | 8 bytes | `44 52 47 59 4D 00 00 01` (`DRGYM\0\0\x01`) |
-| version | u32 | 1 |
+| magic | 8 bytes | `44 52 47 59 4D 00 00 02` (`DRGYM\0\0\x02`) |
+| version | u32 | 2 |
 | opcode | u8 | `0x81` HANDSHAKE |
 | handshake | byte string | JSON |
 
@@ -49,16 +65,27 @@ explicit RESET still restarts the arenas.
 
 | Opcode | Name | Payload |
 |---|---|---|
-| `0x01` | STEP | byte string of one action per env, in env order |
+| `0x01` | STEP | u32 env count, then `x` and `y` as `f32` per env, in env order |
 | `0x02` | RESET | optional u64 seed (presence flag, then value) |
 | `0x03` | CLOSE | none |
 
-Actions are `0` idle, `1` left, `2` right, `3` up, `4` down, `5` up-left,
-`6` up-right, `7` down-left, `8` down-right.
+An action is a direction in world coordinates, `+y` up. Its **length is not
+speed**: only the heading is read, and the simulation normalises it. A
+direction shorter than the simulation's idle floor means standing still, which
+is how an agent says "nowhere" when every heading looks equally bad — and the
+only way it can, since a continuous policy never samples exactly zero.
 
-A STEP is validated completely before any env moves: the action count must
-equal the env count, and every byte must name an action. A failure leaves the
-batch untouched.
+The length prefix counts **envs, not floats**, so a payload that lost half its
+bytes is a length error rather than half a batch of plausible directions
+applied to the wrong arenas. Each env costs eight bytes, and the payload cap is
+checked against that byte cost.
+
+A STEP is read in full before any complaint about its contents, so a rejected
+message does not leave unread bytes in the pipe for the next read to trip over.
+It is then validated completely before any env moves: the direction count must
+equal the env count, and every component must be finite. A NaN would reach the
+player's position and from there every value of every observation, so it is
+refused rather than repaired. A failure leaves the batch untouched.
 
 ## Responses
 

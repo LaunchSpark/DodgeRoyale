@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use bevy::math::Vec2;
 use dodge_royale::gym::protocol::{
     ProtocolError, Request, read_handshake, read_reset, read_step, write_request,
 };
@@ -166,7 +167,10 @@ fn stepping_reports_transitions_and_auto_resets_at_the_budget() {
 
     // The budget is three frames, so the third step ends both episodes.
     for frame in 1..=3_u32 {
-        gym.send(&Request::Step(vec![2, 5]));
+        gym.send(&Request::Step(vec![
+            Vec2::new(0.966, 0.259),
+            Vec2::new(-0.259, -0.966),
+        ]));
         let batch = read_step(&mut gym.stdout, 1 << 30).expect("a step response");
         assert_eq!(batch.transitions.len(), 2);
         assert_eq!(batch.observations.len(), 2 * OBSERVATION_VALUES);
@@ -200,7 +204,7 @@ fn a_seeded_reset_reproduces_frame_zero() {
     read_handshake(&mut gym.stdout).expect("a handshake");
     let first = read_reset(&mut gym.stdout, 1 << 30).expect("frame zero");
 
-    gym.send(&Request::Step(vec![1, 1]));
+    gym.send(&Request::Step(vec![Vec2::new(0.966, 0.259); 2]));
     read_step(&mut gym.stdout, 1 << 30).expect("a step");
 
     gym.send(&Request::Reset(Some(7)));
@@ -233,8 +237,8 @@ fn a_malformed_request_is_an_error_record_and_a_failed_exit() {
     read_handshake(&mut gym.stdout).expect("a handshake");
     read_reset(&mut gym.stdout, 1 << 30).expect("frame zero");
 
-    // An action outside the nine: the batch must not step at all.
-    gym.send(&Request::Step(vec![0, 200]));
+    // A direction that is not a number: the batch must not step at all.
+    gym.send(&Request::Step(vec![Vec2::ZERO, Vec2::new(f32::NAN, 0.0)]));
     let error = read_step(&mut gym.stdout, 1 << 30);
     assert!(
         matches!(error, Err(ProtocolError::UnknownOpcode(0xFF))),
@@ -252,7 +256,7 @@ fn a_step_with_the_wrong_action_count_never_steps_an_env() {
     read_handshake(&mut gym.stdout).expect("a handshake");
     read_reset(&mut gym.stdout, 1 << 30).expect("frame zero");
 
-    gym.send(&Request::Step(vec![0]));
+    gym.send(&Request::Step(vec![Vec2::ZERO]));
     let error = read_step(&mut gym.stdout, 1 << 30);
     assert!(matches!(error, Err(ProtocolError::UnknownOpcode(0xFF))));
     assert!(!gym.wait().success());
@@ -263,7 +267,7 @@ fn protocol_output_carries_nothing_but_protocol() {
     let mut gym = Gym::start(&SMALL);
     read_handshake(&mut gym.stdout).expect("a handshake");
     read_reset(&mut gym.stdout, 1 << 30).expect("frame zero");
-    gym.send(&Request::Step(vec![0, 0]));
+    gym.send(&Request::Step(vec![Vec2::ZERO; 2]));
     read_step(&mut gym.stdout, 1 << 30).expect("a step");
     gym.send(&Request::Close);
 

@@ -10,6 +10,8 @@ Every test has a deadline, and every one closes its child however it ends.
 
 from __future__ import annotations
 
+import struct
+import math
 import os
 import time
 from pathlib import Path
@@ -64,7 +66,7 @@ def test_the_binary_is_the_one_we_think_it_is():
 
 def test_handshake_step_reset_and_close():
     with client() as gym:
-        assert gym.handshake.protocol_version == 1
+        assert gym.handshake.protocol_version == 2
         assert gym.handshake.envs == 2
         assert gym.handshake.root_seed == 7
         assert gym.handshake.enemy_count == 12
@@ -73,7 +75,7 @@ def test_handshake_step_reset_and_close():
         frame_zero = gym.initial
         assert frame_zero.observations.shape == (2, gym.layout.observation_values)
 
-        batch = gym.step([2, 5])
+        batch = gym.step([(0.966, 0.259), (-0.259, -0.966)])
         assert batch.transitions[0].frame == 1
         assert np.isfinite(batch.observations).all()
 
@@ -89,11 +91,16 @@ def test_an_invalid_action_is_an_error_record_and_a_failed_exit():
     try:
         # The client refuses it before it reaches the wire, which is a plain
         # ValueError: nothing was sent, so there is no session to fail.
-        with pytest.raises(ValueError, match="not one of"):
-            gym.step([0, 99])
-        # Send a bad action past the client's own check, the way a broken
-        # client would, and the server must answer with an ERROR record.
-        gym._send(bytes([0x01]) + (2).to_bytes(4, "little") + bytes([0, 200]))
+        with pytest.raises(ValueError, match="not finite"):
+            gym.step([(0.0, 0.0), (float("nan"), 0.0)])
+        # Send a direction that is not a number past the client's own check,
+        # the way a broken client would, and the server must answer with an
+        # ERROR record rather than letting a NaN into an arena.
+        gym._send(
+            bytes([0x01])
+            + (2).to_bytes(4, "little")
+            + struct.pack("<4f", 0.0, 0.0, float("nan"), 0.0)
+        )
         with pytest.raises((GymError, ProtocolError)):
             gym._read_step()
     finally:
@@ -112,8 +119,14 @@ def test_an_unseeded_reset_advances_the_stream_and_a_seeded_one_repeats_it():
 
 # --- replay across processes and worker counts ----------------------------
 
+def _script(step: int, env: int) -> tuple[float, float]:
+    """A heading that sweeps the circle, off the old nine-way compass."""
+    radians = math.radians((step * 37 + env * 113) % 360)
+    return (math.cos(radians), math.sin(radians))
+
+
 REPLAY_ACTIONS = [
-    [1, 2], [3, 4], [5, 6], [7, 8], [0, 1], [2, 3], [4, 5], [6, 7],
+    [_script(step, env) for env in range(2)] for step in range(8)
 ]
 
 
@@ -175,7 +188,7 @@ def test_a_different_seed_produces_a_different_run():
 def test_a_timeout_carries_a_terminal_observation_and_a_reset_seed():
     with RoyaleVecEnv(**SMALL, seed=7, rewards=Rewards()) as env:
         for _ in range(SMALL["max_frames"]):
-            _, _, dones, infos = env.step(np.zeros(env.num_envs, dtype=np.int64))
+            _, _, dones, infos = env.step(np.zeros((env.num_envs, 2), dtype=np.float32))
         assert all(dones), "the budget ends every episode together"
         for info in infos:
             assert info["TimeLimit.truncated"] is True
@@ -191,7 +204,7 @@ def test_a_death_terminates_without_truncating():
     with RoyaleVecEnv(**config, rewards=Rewards()) as env:
         died = None
         while died is None and time.monotonic() < deadline:
-            _, _, _, infos = env.step(np.zeros(env.num_envs, dtype=np.int64))
+            _, _, _, infos = env.step(np.zeros((env.num_envs, 2), dtype=np.float32))
             for index, info in enumerate(infos):
                 if info.get("run_over") and not info.get("TimeLimit.truncated", False):
                     died = (index, info)
@@ -211,7 +224,7 @@ def test_a_retained_observation_is_not_rewritten_by_later_steps():
         kept = observations.copy()
         first = observations
         for _ in range(4):
-            env.step(np.zeros(env.num_envs, dtype=np.int64))
+            env.step(np.zeros((env.num_envs, 2), dtype=np.float32))
         assert np.array_equal(first, kept), "the array handed out was rewritten"
 
 
@@ -352,7 +365,7 @@ def test_the_dashboard_reports_survival_in_seconds():
     ) as env:
         summaries = []
         for _ in range(frames):
-            _, _, _, infos = env.step(np.zeros(env.num_envs, dtype=np.int64))
+            _, _, _, infos = env.step(np.zeros((env.num_envs, 2), dtype=np.float32))
             summaries += [i["episode_summary"] for i in infos if "episode_summary" in i]
     assert summaries, "an episode finished"
     for summary in summaries:
@@ -376,4 +389,4 @@ def test_the_package_lives_entirely_in_this_checkout():
 
     root = Path(dodge_royale.__file__).resolve().parent.parent.parent
     assert (root / "Cargo.toml").exists(), "the trainer sits inside the Rust checkout"
-    assert (root / "tests" / "fixtures" / "gym-v1" / "manifest.json").exists()
+    assert (root / "tests" / "fixtures" / "gym-v2" / "manifest.json").exists()

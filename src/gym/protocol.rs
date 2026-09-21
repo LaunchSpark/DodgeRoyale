@@ -1,23 +1,32 @@
-//! The byte schema the trainer speaks, version 1.
+//! The byte schema the trainer speaks, version 2.
 //!
 //! Frozen before the Python client exists, so both sides are written against
 //! the document rather than against each other. Everything is explicit: fixed
 //! width, little endian, length-prefixed. No Rust struct is ever handed to the
 //! wire, so layout, padding and `usize` cannot leak into the format.
 //!
-//! See `docs/superpowers/specs/velocity-flow-royale-protocol-v1.md`.
+//! Version 2 replaces version 1's action byte per env with a direction
+//! vector per env, so the agent can move anywhere rather than along one of nine
+//! compass headings. Nothing else moved: the observation, the transitions and
+//! every response are byte-for-byte what version 1 sent.
+//!
+//! See `docs/superpowers/specs/velocity-flow-royale-protocol-v2.md`.
 
 use std::io::{self, Read, Write};
 
+use bevy::math::Vec2;
 use serde::{Deserialize, Serialize};
 
 use crate::observation::Layout;
 
+/// Bytes one env's direction costs on the wire: x and y as little-endian f32.
+const DIRECTION_BYTES: u64 = 8;
+
 /// Identifies the stream, and catches a client pointed at the wrong binary.
-pub const MAGIC: [u8; 8] = *b"DRGYM\0\0\x01";
+pub const MAGIC: [u8; 8] = *b"DRGYM\0\0\x02";
 
 /// Bumped whenever a message's meaning changes.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Opcodes a client may send.
 pub mod request {
@@ -57,8 +66,10 @@ pub enum ProtocolError {
         got: usize,
         expected: usize,
     },
-    /// An action byte outside the nine actions.
-    InvalidAction(u8),
+    /// A direction that was not a finite number.
+    InvalidAction {
+        env: usize,
+    },
     /// A string field that was not UTF-8, or JSON that did not parse.
     Malformed(String),
 }
@@ -90,7 +101,12 @@ impl core::fmt::Display for ProtocolError {
             Self::ActionCount { got, expected } => {
                 write!(formatter, "expected {expected} actions, got {got}")
             }
-            Self::InvalidAction(byte) => write!(formatter, "action {byte} is not one of the nine"),
+            Self::InvalidAction { env } => {
+                write!(
+                    formatter,
+                    "env {env} was sent a direction that is not finite"
+                )
+            }
             Self::Malformed(reason) => write!(formatter, "malformed message: {reason}"),
         }
     }
@@ -112,10 +128,13 @@ pub struct Handshake {
 }
 
 /// What a client asks for.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Not `Eq`: an action is a direction now, and directions are floats.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Request {
-    /// One action per env, in env order.
-    Step(Vec<u8>),
+    /// One direction per env, in env order. Length does not set speed; a
+    /// direction shorter than the idle floor means standing still.
+    Step(Vec<Vec2>),
     /// Restart every env. `Some` restarts the seed stream from that root;
     /// `None` continues it, which is why the seed carries a presence flag --
     /// zero is a perfectly good seed.
@@ -375,7 +394,16 @@ pub fn write_request<W: Write>(writer: &mut W, request: &Request) -> Result<(), 
     match request {
         Request::Step(actions) => {
             write_u8(writer, request::STEP)?;
-            write_bytes(writer, actions)?;
+            // The count names envs, not floats, so a payload cut in half is a
+            // length error here rather than half a batch of plausible
+            // directions silently applied to the wrong arenas.
+            write_u32(writer, u32::try_from(actions.len()).unwrap_or(u32::MAX))?;
+            let mut block = Vec::with_capacity(actions.len().saturating_mul(8));
+            for action in actions {
+                block.extend_from_slice(&action.x.to_le_bytes());
+                block.extend_from_slice(&action.y.to_le_bytes());
+            }
+            writer.write_all(&block)?;
         }
         Request::Reset(seed) => {
             write_u8(writer, request::RESET)?;
@@ -431,6 +459,12 @@ fn read_bytes<R: Read>(reader: &mut R, maximum: u64) -> Result<Vec<u8>, Protocol
 /// The declared count is still checked against `maximum` before anything is
 /// allocated, and the block is a fixed 4 KiB regardless of what was declared,
 /// so a hostile length cannot turn into a large read buffer.
+fn read_f32<R: Read>(reader: &mut R) -> Result<f32, ProtocolError> {
+    let mut quad = [0_u8; 4];
+    read_exact(reader, &mut quad)?;
+    Ok(f32::from_le_bytes(quad))
+}
+
 fn read_floats<R: Read>(reader: &mut R, maximum: u64) -> Result<Vec<f32>, ProtocolError> {
     let count = read_length(reader, maximum)?;
     let mut values = Vec::with_capacity(count);
@@ -526,19 +560,40 @@ fn read_request_body<R: Read>(
 ) -> Result<Request, ProtocolError> {
     match opcode {
         request::STEP => {
-            let actions = read_bytes(reader, maximum)?;
-            if actions.len() != envs {
+            // The count names envs, and each env costs eight bytes. Checked
+            // as bytes rather than as envs so a refusal reports the cap that
+            // actually exists, and bounds the same number of bytes that v1's
+            // byte-counted length did.
+            let declared = u64::from(read_u32(reader)?).saturating_mul(DIRECTION_BYTES);
+            if declared > maximum {
+                return Err(ProtocolError::PayloadTooLarge { declared, maximum });
+            }
+            let count = usize::try_from(declared / DIRECTION_BYTES).unwrap_or(usize::MAX);
+            // Read in full before any complaint about its contents. A reader
+            // that errored early would leave the rest of the message in the
+            // pipe, so the sender would be writing into a stream nobody is
+            // reading -- which surfaces as a broken pipe on the client rather
+            // than as the error the server actually sent.
+            let mut actions = Vec::with_capacity(count.min(1_024));
+            let mut not_finite = None;
+            for env in 0..count {
+                let direction = Vec2::new(read_f32(reader)?, read_f32(reader)?);
+                if not_finite.is_none() && !direction.is_finite() {
+                    not_finite = Some(env);
+                }
+                actions.push(direction);
+            }
+            if count != envs {
                 return Err(ProtocolError::ActionCount {
-                    got: actions.len(),
+                    got: count,
                     expected: envs,
                 });
             }
-            if let Some(bad) = actions
-                .iter()
-                .copied()
-                .find(|byte| crate::simulation::Action::from_byte(*byte).is_none())
-            {
-                return Err(ProtocolError::InvalidAction(bad));
+            // Refused rather than repaired: a NaN would reach the player's
+            // position and from there every observation the arena produces,
+            // and a client sending one has a bug worth being told about.
+            if let Some(env) = not_finite {
+                return Err(ProtocolError::InvalidAction { env });
             }
             Ok(Request::Step(actions))
         }

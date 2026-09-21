@@ -1,4 +1,4 @@
-//! Byte-level tests for protocol v1.
+//! Byte-level tests for protocol v2.
 //!
 //! These pin the format: a change that breaks one of these breaks every
 //! trained checkpoint's ability to be fed, so it needs a version bump.
@@ -31,8 +31,8 @@ fn a_handshake_round_trips_with_its_whole_layout() {
 
     assert_eq!(
         bytes.get(..8).expect("the magic"),
-        b"DRGYM\0\0\x01",
-        "the stream identifies itself first"
+        b"DRGYM\0\0\x02",
+        "the stream identifies itself first, and says which version it speaks"
     );
     let read = read_handshake(&mut bytes.as_slice()).expect("reading it back");
     assert_eq!(read, handshake());
@@ -68,15 +68,36 @@ fn a_future_version_is_refused_before_anything_is_built() {
 #[test]
 fn a_step_request_is_bytes_we_can_write_out_by_hand() {
     let mut bytes = Vec::new();
-    write_request(&mut bytes, &Request::Step(vec![0, 8])).expect("writing a step");
+    let actions = vec![Vec2::ZERO, Vec2::new(1.0, -0.5)];
+    write_request(&mut bytes, &Request::Step(actions.clone())).expect("writing a step");
     assert_eq!(
         bytes,
-        vec![0x01, 2, 0, 0, 0, 0, 8],
-        "opcode, length, then one action per env"
+        vec![
+            0x01, // STEP
+            2, 0, 0, 0, // two envs, not two floats
+            0, 0, 0, 0, // env 0 x = 0.0
+            0, 0, 0, 0, // env 0 y = 0.0
+            0, 0, 0x80, 0x3F, // env 1 x = 1.0
+            0, 0, 0, 0xBF, // env 1 y = -0.5
+        ],
+        "opcode, env count, then x and y per env"
     );
 
     let request = read_request(&mut bytes.as_slice(), 2, 1_024).expect("reading it back");
-    assert_eq!(request, Request::Step(vec![0, 8]));
+    assert_eq!(request, Request::Step(actions));
+}
+
+#[test]
+fn a_direction_survives_the_wire_exactly() {
+    // Not a round number in binary: a client that read the payload as
+    // anything but little-endian f32 would come back with a different angle.
+    let actions = vec![Vec2::new(0.123_456_79, -0.987_654_3)];
+    let mut bytes = Vec::new();
+    write_request(&mut bytes, &Request::Step(actions.clone())).expect("writing a step");
+    assert_eq!(
+        read_request(&mut bytes.as_slice(), 1, 1_024).expect("reading it back"),
+        Request::Step(actions)
+    );
 }
 
 #[test]
@@ -112,7 +133,7 @@ fn a_close_is_one_byte() {
 #[test]
 fn a_step_with_the_wrong_number_of_actions_steps_nothing() {
     let mut bytes = Vec::new();
-    write_request(&mut bytes, &Request::Step(vec![0, 1, 2])).expect("writing a step");
+    write_request(&mut bytes, &Request::Step(vec![Vec2::ZERO; 3])).expect("writing a step");
     match read_request(&mut bytes.as_slice(), 2, 1_024) {
         Err(ProtocolError::ActionCount {
             got: 3,
@@ -123,13 +144,34 @@ fn a_step_with_the_wrong_number_of_actions_steps_nothing() {
 }
 
 #[test]
-fn an_action_outside_the_nine_is_refused() {
-    let mut bytes = Vec::new();
-    write_request(&mut bytes, &Request::Step(vec![0, 9])).expect("writing a step");
-    match read_request(&mut bytes.as_slice(), 2, 1_024) {
-        Err(ProtocolError::InvalidAction(9)) => {}
-        other => panic!("expected an invalid action, got {other:?}"),
+fn a_direction_that_is_not_finite_is_refused() {
+    // A NaN would reach the player's position and from there every value in
+    // every observation, so it must not get past the reader.
+    for bad in [
+        Vec2::new(f32::NAN, 0.0),
+        Vec2::new(0.0, f32::INFINITY),
+        Vec2::splat(f32::NEG_INFINITY),
+    ] {
+        let mut bytes = Vec::new();
+        write_request(&mut bytes, &Request::Step(vec![Vec2::ZERO, bad])).expect("writing a step");
+        match read_request(&mut bytes.as_slice(), 2, 1_024) {
+            Err(ProtocolError::InvalidAction { env: 1 }) => {}
+            other => panic!("expected env 1 refused for {bad}, got {other:?}"),
+        }
     }
+}
+
+#[test]
+fn a_long_direction_is_carried_rather_than_refused() {
+    // Only finiteness is the reader's business. Length does not set speed, and
+    // clamping here would hide a client bug the arena would otherwise ignore.
+    let actions = vec![Vec2::splat(1_000.0)];
+    let mut bytes = Vec::new();
+    write_request(&mut bytes, &Request::Step(actions.clone())).expect("writing a step");
+    assert_eq!(
+        read_request(&mut bytes.as_slice(), 1, 1_024).expect("reading it back"),
+        Request::Step(actions)
+    );
 }
 
 #[test]
@@ -142,11 +184,13 @@ fn an_unknown_opcode_is_named_rather_than_guessed() {
 
 #[test]
 fn a_declared_length_beyond_the_maximum_is_refused_before_allocating() {
-    // Opcode, then a length of four billion.
+    // Opcode, then four billion envs. The count names envs and each costs
+    // eight bytes, so what is refused is the eight-times-larger byte cost --
+    // and the refusal quotes the cap that really exists, not a scaled one.
     let bytes = vec![0x01, 0xff, 0xff, 0xff, 0xff];
     match read_request(&mut bytes.as_slice(), 2, 64) {
         Err(ProtocolError::PayloadTooLarge { declared, maximum }) => {
-            assert_eq!(declared, u64::from(u32::MAX));
+            assert_eq!(declared, u64::from(u32::MAX) * 8);
             assert_eq!(maximum, 64);
         }
         other => panic!("expected a size refusal, got {other:?}"),
@@ -156,7 +200,7 @@ fn a_declared_length_beyond_the_maximum_is_refused_before_allocating() {
 #[test]
 fn a_message_cut_in_half_is_truncation_not_a_short_batch() {
     let mut bytes = Vec::new();
-    write_request(&mut bytes, &Request::Step(vec![0, 1])).expect("writing a step");
+    write_request(&mut bytes, &Request::Step(vec![Vec2::ZERO; 2])).expect("writing a step");
     bytes.truncate(bytes.len() - 1);
     assert!(matches!(
         read_request(&mut bytes.as_slice(), 2, 1_024),

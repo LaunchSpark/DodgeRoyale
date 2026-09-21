@@ -1,4 +1,4 @@
-//! Read the committed protocol-v1 fixtures back with the shipped codec.
+//! Read the committed protocol-v2 fixtures back with the shipped codec.
 //!
 //! The fixtures exist for the Python client, which reads them without a Rust
 //! toolchain. That makes them a one-way promise unless something on this side
@@ -44,7 +44,7 @@ fn values_in(envs: u32) -> usize {
 }
 
 fn fixture_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gym-v1")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gym-v2")
 }
 
 fn manifest() -> Manifest {
