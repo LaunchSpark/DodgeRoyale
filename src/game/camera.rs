@@ -1,13 +1,14 @@
-//! An independent, exponentially smoothed camera with viewport-aware boundaries.
+//! An independent, exponentially smoothed camera with viewport-aware boundaries
+//! and a still zone at the centre of the view.
 
 use bevy::{camera::ScalingMode, prelude::*};
 
 use super::player::{Player, Velocity};
 use crate::simulation::PlayerSet;
 
-use super::screen::Screen;
+use super::screen::{Screen, WatchMode};
 
-use crate::camera_math::{CAMERA_DECAY, VIEW_HEIGHT, VIEW_WIDTH};
+use crate::camera_math::{CAMERA_DEADZONE, CAMERA_DECAY, VIEW_HEIGHT, VIEW_WIDTH, follow_offset};
 use crate::motion::MAX_FRAME_SECONDS;
 use crate::scale::WORLD_HALF_EXTENTS;
 use crate::torus::{wrap_position, wrapped_delta};
@@ -61,6 +62,7 @@ fn follow_player(
     mut camera: Single<&mut Transform, (With<FollowCamera>, Without<Player>)>,
     time: Res<Time>,
     input: Res<ButtonInput<KeyCode>>,
+    watch: Res<WatchMode>,
 ) {
     let (player_transform, velocity) = *player;
     let desired = wrap_position(
@@ -70,9 +72,12 @@ fn follow_player(
     let here = camera.translation.truncate();
     // Chase the nearest image of the player. Without this a seam crossing looks
     // like the player fled to the far side, and the camera pans the long way.
-    let target = here + wrapped_delta(here, desired, WORLD_HALF_EXTENTS);
-    let next = if input.just_pressed(KeyCode::KeyR) {
-        target
+    let offset = wrapped_delta(here, desired, WORLD_HALF_EXTENTS);
+    let next = if !watch.0 && input.just_pressed(KeyCode::KeyR) {
+        // Recentre means centre. The deadzone is skipped here on purpose: with
+        // it, the key would only ever pull the player to the edge of the zone,
+        // which is where it already was.
+        here + offset
     } else {
         // Cap the frame time to match `advance_motion`: a backgrounded browser
         // tab or a frame spike must not snap the camera to its target the way a
@@ -80,6 +85,9 @@ fn follow_player(
         // applies this same cap, so the camera lag stays perceptually consistent
         // across refresh rates and tab-switch resumptions on both native and web.
         let dt = time.delta_secs().min(MAX_FRAME_SECONDS);
+        // A still zone at the centre of the view, so movement too small to be
+        // going anywhere does not move the world underneath it.
+        let target = here + follow_offset(offset, CAMERA_DEADZONE);
         tween::exponential(&here, &target, CAMERA_DECAY, dt)
     };
     camera.translation = wrap_position(next, WORLD_HALF_EXTENTS).extend(camera.translation.z);
