@@ -35,7 +35,7 @@ cd training
 uv sync --extra dashboard --extra cu126       # or --extra cpu without an NVIDIA GPU
 uv run python -m dodge_royale.train --check-env          # verify both halves talk
 uv run python -m dodge_royale.train                     # train
-uv run marimo run dodge_royale/dashboard.py --no-sandbox   # or drive it from a dashboard
+uv run python -m dodge_royale.dashboard_server run dodge_royale/dashboard.py --no-sandbox   # or drive it from a dashboard
 ```
 
 [`training/README.md`](training/README.md) has the full setup, including what to
@@ -104,6 +104,11 @@ dashboard extra once as described under AI training above. If marimo is already
 running on port 2718, the runner reuses it and leaves it running. The browser
 game's **AI dashboard** link opens it in a new tab. For a hosted game, change
 the link's `href` in `web/index.html` to the dashboard's reachable URL.
+The dashboard's **Watch** button embeds this web game and controls its player
+with the latest policy snapshot through a local inference service. The same
+reply carries the danger field the policy read, which the game draws over the
+window it describes -- centred on the player, under the sprites -- so what the
+agent believed is visible beside what it did.
 
 To produce a static release bundle:
 
@@ -281,7 +286,7 @@ The gym serves headless arenas to a trainer over stdin and stdout
 ```
 
 Golden protocol fixtures live in
-[`tests/fixtures/gym-v1/`](tests/fixtures/gym-v1/README.md): real protocol bytes,
+[`tests/fixtures/gym-v2/`](tests/fixtures/gym-v2/README.md): real protocol bytes,
 committed, so the Python client can be tested without a Rust toolchain. Two Rust
 test sets guard the wire format independently — hand-written wire images, and the
 fixtures read back with the shipped codec. Regenerate after an intentional

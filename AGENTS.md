@@ -54,10 +54,67 @@ and retain their own Bevy apps with single-threaded schedules; apps never cross
 threads. The coordinator gathers owned results in environment-index order. This
 worker model is separate from the finite startup demo's Rayon pool.
 
-The wire format is frozen at protocol v1 and is guarded two ways that do not
+An action is a direction, not one of nine. The agent sends `(x, y)` in world
+coordinates with `+y` up; **length is not speed**, only the heading is read, and
+a direction shorter than `simulation::IDLE_THRESHOLD` means standing still. That
+floor is not a nicety: the nine candidate paths include idle, so a policy that
+finds every heading equally dangerous blends to near zero, and the heading of a
+vector formed by nearly cancelling opposites is noise. It is also the only way
+to stand still at all, since a Gaussian never samples exactly zero. Apply it
+through `simulation::intent_from_command`, the one door both the gym worker and
+the browser autopilot go through.
+
+`_FieldDirection` in `training/dodge_royale/policies.py` produces that heading:
+`softmax(-danger / T)` over the nine candidate paths, weighting their unit
+headings into one vector. Normalise the headings first -- the simulation spells
+a diagonal `(1, 1)`, and summing that unchanged gives the corners half again the
+pull of the axes. It replaces SB3's `action_net` the way `_FieldLogits` replaced
+it before: the mean comes from the field, `log_std` stays SB3's, and there is no
+learned head. Keep `log_std_init` well below zero; at SB3's default of zero the
+sampled heading is very nearly noise around the field's answer.
+
+The reward charges a small penalty for turning, in `rewards.py`. Free up to
+`turn_free_degrees` (45, one step around the compass the candidate paths are
+drawn on), then straight-line to `turn_penalty` at a full about-face. Graded
+rather than a cliff, or the agent learns that once a turn is worth paying for it
+may as well be the largest available. Starting and stopping are not turns, and a
+new episode inherits no heading from the dead one.
+
+Checkpoints from before this do not load, and the architecture name is what says
+so. `ROYALE_ARCHITECTURE` carries a `-direction` suffix and the old name sits in
+`SUPERSEDED_ARCHITECTURES`, because the layout and the extractor are unchanged:
+without the name an old checkpoint passes every gate and fails inside torch on a
+missing state-dict key.
+
+One STEP advances exactly one 60 Hz frame on exactly one direction, and
+`hold_frames` is only how far ahead the observation's candidate paths are
+predicted. `gym::workers::tests` pins both halves of that: a step never advances
+more than a frame, and two batches differing only in `hold_frames` produce
+identical observations everywhere except the path section. Anything that decides
+at a different cadence -- a browser watcher, an evaluation loop -- is playing a
+game the policy was not trained on.
+
+The movement rules are implemented twice, because the trainer has to predict
+player displacement and the wire carries none of the constants.
+`simulation::motion_contract` is the one record of them, named by
+`MOTION_CONTRACT_ID`, and `training/dodge_royale/motion.py` is the second copy.
+`tests/fixtures/player-motion/` is what keeps them honest: Rust emits positions
+and velocities from the real `advance_motion`, and Python replays the same
+commands and has to land on them exactly -- bit for bit, because both sides run
+the same arithmetic in the same order in float32. Only displacement carries a
+tolerance, because Rust measures it from positions and Python derives it from
+the velocity curve, which is what makes that one an independent check rather
+than a restatement. Never regenerate
+those expectations from the Python formula -- a fixture derived from the thing
+it checks agrees by construction and keeps agreeing through a shared mistake.
+Both sides work in `float32` and copy each other's operation order, and
+`tests/motion_fixtures.rs` compares the recorded constants against the live ones
+so a changed constant fails there rather than in a training run.
+
+The wire format is frozen at protocol v2 and is guarded two ways that do not
 depend on each other: hand-written wire images in `src/gym/protocol/tests.rs` say
 what the bytes must be from first principles, and committed golden fixtures under
-`tests/fixtures/gym-v1/` are read back by `tests/gym_fixtures.rs` and by Python.
+`tests/fixtures/gym-v2/` are read back by `tests/gym_fixtures.rs` and by Python.
 Changing how the codec moves bytes is allowed; changing which bytes it moves is a
 version bump and a spec edit. Floats travel a block at a time through a reusable
 buffer rather than four bytes per call — measured, not assumed, by
@@ -68,7 +125,7 @@ correctly rounded.
 
 The Python trainer lives under `training/dodge_royale/`, with its own package
 metadata, tests, CLI, dashboard, and local training artifacts. Golden protocol
-fixtures live at root `tests/fixtures/gym-v1/` for both languages. Build and
+fixtures live at root `tests/fixtures/gym-v2/` for both languages. Build and
 validate both sides from one repository revision. Python dependencies remain
 optional for playing or building the game.
 
@@ -162,6 +219,10 @@ training virtual environment on loopback port 2718 before starting the web
 server, then stop only the marimo process they started. They reuse an existing
 server without taking ownership. The Docker web image remains static; the
 host-side runner owns marimo. Hosted deployments must configure the link's URL.
+Launch marimo through `training/dodge_royale/dashboard_server.py`: it imports
+PyTorch before marimo installs formatter hooks shared by its run-mode kernel
+threads. Concurrent browser sessions otherwise can import a partially
+initialized `torch`, causing the first cell and all its descendants to fail.
 
 Metrics are defined once, in `metrics.py`, and both the CLI and the dashboard
 report from the same collector. A metric is a `MetricDefinition` in `METRICS`
@@ -170,8 +231,35 @@ so neither entry point can define one the other lacks or means differently.
 Optimizer metrics read as absent rather than zero before the first update,
 because zero would chart as a real loss. The device is read off a policy
 parameter rather than from what was requested, so a run that fell back to CPU
-says so. Watch Agent stays absent until in-game inference exists; it is the
-autopilot spec, written after a policy trains.
+says so. The dashboard embeds the real Bevy web game in a stable iframe.
+`game/autopilot.rs` uses `view_world` and the library observation encoder on
+that game's ECS world, asks a loopback Python policy service for a direction,
+and writes the result to `PlayerIntent` before movement. It asks every frame,
+because a STEP advances the arena exactly one 60 Hz frame on exactly one
+direction: `hold_frames` is the span the observation's candidate paths are
+predicted over, never an action repeat, so holding a direction in the browser
+would be a cadence the policy was never trained on. The browser still advances
+on wall-clock time rather than a fixed 60 Hz step, so its decisions per
+simulated second only match the trainer's while it draws at 60 fps. Watch mode starts in
+`Screen::Playing`, restarts that same state after a hit, and never draws the
+menu. Keyboard movement and camera recentering are disabled there. The iframe
+is removed from the tab order and cannot take pointer focus; the normal game
+retains its keyboard controls.
+The browser holds at most one inference request in flight and applies the most
+recent answer while Bevy keeps drawing at its own rate. `browser_watch.py`
+returns a four-byte header and the extractor's nearest-horizon danger field; it
+creates no second arena, camera, or PNG stream. The header keeps the field
+four-byte aligned so the page reads it in place rather than copying 16 KB per
+decision, and an edge of zero means a policy with no field, which still plays.
+The game anchors each field to the frame whose observation produced it, drawn at
+the nearest wrapped image of that position, so a slow answer visibly lags rather
+than silently disagreeing with the sprites under it. The colour range follows
+the field's own through an exponential average, because rescaling per frame
+makes the picture flash every time an enemy moves. It loads a compatible
+snapshot between episodes, and `watching.py` owns its server outside marimo's
+reactive cells. Browser-only `js-sys` and
+`wasm-bindgen` provide safe JavaScript calls; native play does not start a
+policy service. Stopping Watch closes the loopback server.
 
 Measured, not assumed. `benches/gym_throughput.rs` splits the Rust side and
 `training/tools/benchmark_royale.py` splits the Python pipeline; results live in
@@ -218,14 +306,24 @@ the player's position plus velocity times 0.15 seconds of lookahead. It follows
 that target through our reusable `tween::exponential` in `src/tween.rs`, with a
 decay rate of 12 per second. This implements `1 - exp(-rate * dt)` using `exp_m1`
 for precision at small frame times, then interpolates from the current value.
-Keep both velocity lookahead and smoothing. Do not restart a timed tween on each
-direction change. See
+A deadzone of four percent of the visible height sits at the centre of the view:
+inside it the camera holds still, and outside it the camera follows only to the
+edge of the zone rather than back to centre, so the target moves continuously
+across the boundary instead of jumping by the zone's width. `follow_offset` in
+`src/camera_math.rs` owns that arithmetic and is tested without a renderer. `R`
+deliberately skips the deadzone, or recentering could only ever pull the player
+to the zone's edge. Keep both velocity lookahead and smoothing. Do not restart a
+timed tween on each direction change. See
 [the exponential smoothing explanation](https://lisyarus.github.io/blog/posts/exponential-smoothing.html).
 Run camera following after player movement in `Update`,
 before Bevy propagates transforms. Preserve camera Z, and clamp both the target
 and the resulting position using the viewport extents. `R` explicitly recenters.
 If movement later uses `FixedUpdate`, interpolate the rendered player position
 before camera following; smoothing alone does not fix mismatched update timing.
+The floor has a center tile and eight periodic copies. `src/game/world.rs` shows
+only the neighboring tiles whose seam is inside the viewport. `Ghosted` actors
+are single entities shifted to their nearest wrapped image, not extra copies to
+hide when the camera is away from an edge.
 
 ## Enemy foundation and collision
 
@@ -290,7 +388,7 @@ type under the existing attempt/pass budgets. Success removes the player's marke
 so replacements use normal distant placement; a fresh player requests a new opener.
 Zero-enemy episodes spawn nothing. The same placement runs in the graphical game
 and headless spawn-only initialization. This changes seeded trajectories but does
-not change the observation layout or protocol v1.
+not change the observation layout or protocol v2.
 
 `src/enemy_population.rs` provides an optional renderer-independent
 `EnemyPopulationPlugin`. The game's default population target is 100, with weighted

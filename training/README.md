@@ -5,7 +5,7 @@ environment, the VelocityFlow policy, the PPO session, the CLI, and the
 dashboard. It drives the Rust simulation as a child process, so a working
 setup needs both halves of the repository.
 
-**Implemented so far:** `protocol.py` (the protocol-v1 client), `vec_env.py`
+**Implemented so far:** `protocol.py` (the protocol-v2 client), `vec_env.py`
 (`RoyaleVecEnv`), `rewards.py`, `telemetry.py`, `velocity.py` (the extractor),
 `policies.py`, `training.py` (the PPO session) and `train.py` (the CLI), with
 their tests, plus `metrics.py`, `worker.py` and `dashboard.py` (the marimo
@@ -157,7 +157,7 @@ marimo server and Chromium, which needs a one-time
 dashboard's controls, since a button press only reaches the worker through
 marimo's reactive graph.
 
-Fixture tests read the committed messages in `../tests/fixtures/gym-v1/` and
+Fixture tests read the committed messages in `../tests/fixtures/gym-v2/` and
 never build or run Rust, which is why most of the suite passes on a machine
 with no Rust toolchain at all. Live tests skip when no binary is built, but
 fail rather than skip when `DODGE_ROYALE_BIN` is set and broken.
@@ -231,9 +231,9 @@ A [marimo](https://marimo.io/) notebook over a live training session: start,
 pause, resume, save, stop, and the run's metrics and charts as it goes.
 
 ```sh
-uv run marimo run  dodge_royale/dashboard.py --no-sandbox   # use it
-uv run marimo edit dodge_royale/dashboard.py --no-sandbox   # change it
-uv run python dodge_royale/dashboard.py                     # a short real run, no browser
+uv run python -m dodge_royale.dashboard_server run  dodge_royale/dashboard.py --no-sandbox   # use it
+uv run python -m dodge_royale.dashboard_server edit dodge_royale/dashboard.py --no-sandbox   # change it
+uv run python dodge_royale/dashboard.py                                           # a short real run, no browser
 ```
 
 From the repository root, `./run.sh web` starts this server and the browser game
@@ -241,6 +241,9 @@ together; `./run.sh web-docker` does the same with the Docker web service. The
 game's **AI dashboard** link opens `http://127.0.0.1:2718/` in a new tab. The
 runner uses the installed `.venv` directly, so launching the web game does not
 trigger an `uv sync` or swap the PyTorch build.
+The `dashboard_server` launcher imports PyTorch before marimo starts its shared
+kernel threads. Without that ordering, simultaneous browser sessions can hit
+a PyTorch formatter import race and leave every dashboard cell in error.
 
 `--no-sandbox` because the notebook carries a PEP 723 header, and without the
 flag marimo offers to build a separate environment from it. The header is
@@ -260,22 +263,36 @@ the tab or killing the kernel all close the gym process.
 
 ### Watch the agent
 
-The dashboard can run the newest policy and draw **what it sees** — the
-256-pixel observation window, the nine paths it is choosing between, and which
-one it took. Not the arena: protocol v1 carries the observation, not the world.
-That is the more useful picture anyway, because it is exactly the information
-the policy had. A dodge into a threat is a bug in the field; a dodge into empty
-space is a bug in the paths.
+Start the browser game with `./run.sh web`, open the dashboard, and press
+**Watch / stop watching**. The dashboard embeds the real Bevy game in an iframe.
+Its camera, sprites and trails render in the browser. The game encodes its own
+world state, asks a local Python service for one policy action, and applies that
+direction to the same `PlayerIntent` that keyboard movement uses, once per
+drawn frame -- the cadence the trainer decides on, which is one direction per
+simulated frame. The service
+returns the action and the danger field it was chosen from; it does not render,
+stream PNGs, or run a second arena. The browser can keep drawing while an
+inference request is in flight.
+The watch iframe does not take keyboard or pointer focus. It opens straight
+into gameplay and restarts gameplay after a death without displaying the menu;
+keyboard controls remain available in the normal game page.
+
+The field is drawn in the game, under the sprites, over the 256-pixel window it
+describes -- which is the window centred on the player, so it moves with them.
+Cold is safe and hot is lethal, on the observation's own 64x64 lattice, sampled
+the same way the controller samples it. It is anchored to the player position
+the observation was encoded at rather than to wherever the player is now: at
+loopback latency the two are a frame apart, and when inference falls behind the
+field lags visibly instead of quietly pointing at the wrong hazards. A policy
+whose extractor has no field still plays, with nothing drawn. For
+`./run.sh web-docker`, set the dashboard's Game URL to
+`http://127.0.0.1:8080/` (or the configured `WEB_PORT`).
 
 A snapshot is published automatically after every completed update, to
-`<checkpoint-dir>/<run-name>-live/update-XXXXXXXX.zip`. The viewer picks up the
-newest one **between episodes, never during one**, so every episode is
-attributable to a single update. Writes are atomic — a hidden name renamed into
-place — so the viewer can never open a half-written zip, and only the newest few
-are kept.
-
-Watching the agent play the real game, with the game's own art, is the in-game
-autopilot: weight export and a Rust forward pass, which is its own spec.
+`<checkpoint-dir>/<run-name>-live/update-XXXXXXXX.zip`. The policy service picks
+up the newest compatible snapshot **between episodes, never during one**. With
+no snapshot yet, the player idles. Writes are atomic — a hidden name renamed
+into place — so the service cannot open a half-written zip.
 
 ## Layout
 
@@ -296,15 +313,17 @@ training/
     train.py              # CLI entry point  [done]
     history.py            # Per-episode training history  [done]
     snapshots.py          # A policy snapshot per update  [done]
-    viewer.py             # Renders what the policy sees  [done]
-    watching.py           # The one watch session a kernel owns  [done]
+    viewer.py             # Offline observation diagnostics  [done]
+    motion.py             # The player's movement rules, pinned to Rust's  [done]
+    browser_watch.py      # Local policy inference for the real web game  [done]
+    watching.py           # One policy service per dashboard kernel  [done]
     metrics.py            # Metric definitions shared by CLI and dashboard  [done]
     worker.py             # Background training thread and its controls  [done]
     dashboard.py          # marimo dashboard  [done]
   tests/                  # Unit tests and live integration tests
 ```
 
-Rust and Python share root `tests/fixtures/gym-v1/`: committed binary messages
+Rust and Python share root `tests/fixtures/gym-v2/`: committed binary messages
 plus JSON expectations. Both sides read the same bytes.
 
 ### Changing dependencies
@@ -338,4 +357,4 @@ policy executes one action per simulation frame; the prediction hold does not
 change that.
 
 See the [design](../docs/superpowers/specs/2026-09-15-velocity-flow-royale-design.md)
-and [protocol v1](../docs/superpowers/specs/velocity-flow-royale-protocol-v1.md).
+and [protocol v2](../docs/superpowers/specs/velocity-flow-royale-protocol-v2.md).
